@@ -15,5 +15,9 @@
     "nuxt": "^4.3.1",
     "vue": "^3.5.28",
     "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@iconify-json/heroicons": "^1.2.3",
+    "@iconify-json/lucide": "^1.2.92"
   }
 }
