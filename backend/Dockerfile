@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y curl build-essential libpq-dev && \
 
 COPY pyproject.toml poetry.lock* ./
 
-RUN poetry install --no-root --no-dev
+RUN poetry install --no-root
 
 COPY . .
 

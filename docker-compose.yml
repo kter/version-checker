@@ -10,6 +10,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - /app/.venv
       - ~/.aws:/root/.aws:ro  # Mount host AWS credentials (read-only)
     env_file:
       - .env
@@ -31,5 +32,5 @@ services:
     env_file:
       - .env
     environment:
-      - NUXT_PUBLIC_API_BASE=http://localhost:8000
+      - NUXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
     restart: unless-stopped
