@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: version-checker-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ~/.aws:/root/.aws:ro  # Mount host AWS credentials (read-only)
+    env_file:
+      - .env
+    environment:
+      - AWS_PROFILE=dev       # Force AWS profile to 'dev' inside container
+      - ENV=local
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: version-checker-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    env_file:
+      - .env
+    environment:
+      - NUXT_PUBLIC_API_BASE=http://localhost:8000
+    restart: unless-stopped
