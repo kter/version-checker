@@ -9,7 +9,7 @@
     <!-- Actions Bar -->
     <div class="flex justify-between items-center">
       <p class="text-sm text-gray-500 dark:text-gray-400">
-        {{ $t('repositories_found', { count: repositories.length }) }}
+        {{ $t('repositories_found', { count: repositories ? repositories.length : 0 }) }}
       </p>
       <UButton
         icon="i-heroicons-arrow-path"
@@ -30,27 +30,27 @@
     <!-- Data Table Card (only shown when there is data) -->
     <div v-if="repositories.length > 0" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       <UTable
-        :rows="repositories"
+        :data="repositories"
         :columns="columns"
         :loading="isLoading"
       >
-        <template #is_eol-data="{ row }">
+        <template #is_eol-cell="{ row }">
           <UBadge
-            :color="row.is_eol ? 'error' : 'success'"
+            :color="row.original.is_eol ? 'error' : 'success'"
             variant="subtle"
             size="sm"
           >
-            {{ row.is_eol ? '⛔ EOL' : '✅ Supported' }}
+            {{ row.original.is_eol ? '⛔ EOL' : '✅ Supported' }}
           </UBadge>
         </template>
-        <template #eol_date-data="{ row }">
+        <template #eol_date-cell="{ row }">
           <span class="text-sm text-gray-600 dark:text-gray-400">
-            {{ row.eol_date ? new Date(row.eol_date).toLocaleDateString() : '—' }}
+            {{ row.original.eol_date ? new Date(row.original.eol_date).toLocaleDateString() : '—' }}
           </span>
         </template>
-        <template #last_scanned_at-data="{ row }">
+        <template #last_scanned_at-cell="{ row }">
           <span class="text-sm text-gray-600 dark:text-gray-400">
-            {{ new Date(row.last_scanned_at).toLocaleString() }}
+            {{ new Date(row.original.last_scanned_at).toLocaleString() }}
           </span>
         </template>
       </UTable>

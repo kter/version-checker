@@ -16,7 +16,7 @@
             <!-- Locale Switcher -->
             <USelect
               :model-value="locale"
-              :options="availableLocales"
+              :items="availableLocales"
               option-attribute="name"
               value-attribute="code"
               size="sm"
@@ -41,7 +41,7 @@
                 color="neutral"
                 variant="outline"
                 size="md"
-                label="$t('logout')"
+                :label="$t('logout')"
                 @click="logout"
               />
             </template>
@@ -62,6 +62,10 @@
 <script setup>
 const { locale, locales, setLocale } = useI18n()
 const availableLocales = computed(() => locales.value)
+
+useHead({
+  title: 'Version Checker'
+})
 
 const isAuthenticated = ref(false)
 const username = ref('')
