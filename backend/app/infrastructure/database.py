@@ -42,6 +42,8 @@ _engine = None
 _async_session_maker = None
 
 
+from sqlalchemy import event
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -50,6 +52,22 @@ def get_engine():
             echo=(settings.env != "prd"),
             pool_pre_ping=True,
         )
+
+        @event.listens_for(_engine.sync_engine, "do_connect")
+        def provide_token(dialect, conn_rec, cargs, cparams):
+            hostname = settings.dsql_hostname
+            if settings.env == "local":
+                token = get_dsql_auth_token(
+                    hostname=hostname, region=settings.aws_region, profile=settings.aws_profile
+                )
+            else:
+                session = boto3.Session(region_name=settings.aws_region)
+                client = session.client("dsql", region_name=settings.aws_region)
+                token = client.generate_db_connect_admin_auth_token(
+                    Hostname=hostname, Region=settings.aws_region
+                )
+            cparams["password"] = token
+
     return _engine
 
 
