@@ -15,30 +15,36 @@
           <div class="flex items-center gap-3">
             <!-- Locale Switcher -->
             <USelect
-              v-model="locale"
+              :model-value="locale"
               :options="availableLocales"
               option-attribute="name"
               value-attribute="code"
               size="sm"
+              @update:model-value="setLocale"
             />
-            <UButton
-              v-if="!isAuthenticated"
-              icon="i-heroicons-arrow-right-on-rectangle"
-              color="primary"
-              variant="solid"
-              size="md"
-              :label="$t('login')"
-              @click="login"
-            />
-            <UButton
-              v-else
-              icon="i-heroicons-arrow-left-on-rectangle"
-              color="neutral"
-              variant="outline"
-              size="md"
-              label="Logout"
-              @click="logout"
-            />
+            <template v-if="!isAuthenticated">
+              <UButton
+                icon="i-heroicons-arrow-right-on-rectangle"
+                color="primary"
+                variant="solid"
+                size="md"
+                :label="$t('login')"
+                @click="login"
+              />
+            </template>
+            <template v-else>
+              <span class="text-sm text-gray-600 dark:text-gray-400">
+                {{ username }}
+              </span>
+              <UButton
+                icon="i-heroicons-arrow-left-on-rectangle"
+                color="neutral"
+                variant="outline"
+                size="md"
+                label="$t('logout')"
+                @click="logout"
+              />
+            </template>
           </div>
         </div>
       </UContainer>
@@ -54,19 +60,32 @@
 </template>
 
 <script setup>
-const { locale, locales } = useI18n()
+const { locale, locales, setLocale } = useI18n()
 const availableLocales = computed(() => locales.value)
 
-// Mock authentication state for now
 const isAuthenticated = ref(false)
+const username = ref('')
 
 const config = useRuntimeConfig()
+
+// Check auth state on mount
+onMounted(() => {
+  const token = localStorage.getItem('auth_token')
+  const storedUser = localStorage.getItem('auth_user')
+  if (token && storedUser) {
+    isAuthenticated.value = true
+    username.value = storedUser
+  }
+})
+
 const login = () => {
-  // Redirect to FastAPI backend OAuth login endpoint
   window.location.href = `${config.public.apiBase}/auth/login`
 }
 
 const logout = () => {
+  localStorage.removeItem('auth_token')
+  localStorage.removeItem('auth_user')
   isAuthenticated.value = false
+  username.value = ''
 }
 </script>

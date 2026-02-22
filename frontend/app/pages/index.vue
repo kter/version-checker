@@ -3,13 +3,13 @@
     <!-- Hero Section -->
     <div class="bg-gradient-to-r from-green-600 to-emerald-500 rounded-2xl p-8 text-white shadow-lg">
       <h2 class="text-2xl font-bold mb-2">{{ $t('dashboard') }}</h2>
-      <p class="text-green-100 text-sm">Monitor framework versions and EOL status across your repositories.</p>
+      <p class="text-green-100 text-sm">{{ $t('subtitle') }}</p>
     </div>
 
     <!-- Actions Bar -->
     <div class="flex justify-between items-center">
       <p class="text-sm text-gray-500 dark:text-gray-400">
-        {{ repositories.length }} repositories found
+        {{ $t('repositories_found', { count: repositories.length }) }}
       </p>
       <UButton
         icon="i-heroicons-arrow-path"
@@ -27,8 +27,8 @@
       ⚠️ {{ error }}
     </div>
 
-    <!-- Data Table Card -->
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <!-- Data Table Card (only shown when there is data) -->
+    <div v-if="repositories.length > 0" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       <UTable
         :rows="repositories"
         :columns="columns"
@@ -54,24 +54,24 @@
           </span>
         </template>
       </UTable>
+    </div>
 
-      <!-- Empty State -->
-      <div v-if="!isLoading && repositories.length === 0" class="py-16 text-center">
-        <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <span class="text-3xl">📦</span>
-        </div>
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">No repositories scanned</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">Click "{{ $t('scan') }}" above to start scanning your repositories.</p>
-        <UButton
-          icon="i-heroicons-arrow-path"
-          color="primary"
-          variant="solid"
-          size="lg"
-          :loading="isScanning"
-          @click="scanOrganization"
-          :label="$t('scan')"
-        />
+    <!-- Empty State (only shown when no data) -->
+    <div v-if="!isLoading && repositories.length === 0" class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 py-16 text-center">
+      <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <span class="text-3xl">📦</span>
       </div>
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-1">{{ $t('no_data') }}</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">{{ $t('no_data_desc', { scan: $t('scan') }) }}</p>
+      <UButton
+        icon="i-heroicons-arrow-path"
+        color="primary"
+        variant="solid"
+        size="lg"
+        :loading="isScanning"
+        @click="scanOrganization"
+        :label="$t('scan')"
+      />
     </div>
   </div>
 </template>
@@ -83,16 +83,16 @@ const isLoading = ref(false)
 const error = ref('')
 const repositories = ref([])
 
-const columns = [
-  { accessorKey: 'repo_id', header: 'Repository', id: 'repo_id' },
-  { accessorKey: 'framework', header: 'Framework', id: 'framework' },
-  { accessorKey: 'version', header: 'Version', id: 'version' },
-  { accessorKey: 'is_eol', header: 'Status', id: 'is_eol' },
-  { accessorKey: 'eol_date', header: 'EOL Date', id: 'eol_date' },
-  { accessorKey: 'last_scanned_at', header: 'Last Scanned', id: 'last_scanned_at' }
-]
-
 const { t } = useI18n()
+
+const columns = computed(() => [
+  { accessorKey: 'repo_id', header: t('col_repository'), id: 'repo_id' },
+  { accessorKey: 'framework', header: t('col_framework'), id: 'framework' },
+  { accessorKey: 'version', header: t('col_version'), id: 'version' },
+  { accessorKey: 'is_eol', header: t('col_status'), id: 'is_eol' },
+  { accessorKey: 'eol_date', header: t('col_eol_date'), id: 'eol_date' },
+  { accessorKey: 'last_scanned_at', header: t('col_last_scanned'), id: 'last_scanned_at' }
+])
 
 // Sample default org ID for demo
 const orgId = "org-1"

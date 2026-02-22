@@ -1,1 +1,23 @@
-{"hello": "Hello World", "login": "Login with GitHub", "dashboard": "Dashboard", "scan": "Scan Repositories"}
+{
+    "hello": "Hello World",
+    "login": "Login with GitHub",
+    "logout": "Logout",
+    "dashboard": "Dashboard",
+    "scan": "Scan Repositories",
+    "subtitle": "Monitor framework versions and EOL status across your repositories.",
+    "repositories_found": "{count} repositories found",
+    "no_data": "No repositories scanned",
+    "no_data_desc": "Click \"{scan}\" above to start scanning your repositories.",
+    "col_repository": "Repository",
+    "col_framework": "Framework",
+    "col_version": "Version",
+    "col_status": "Status",
+    "col_eol_date": "EOL Date",
+    "col_last_scanned": "Last Scanned",
+    "status_eol": "⛔ EOL",
+    "status_supported": "✅ Supported",
+    "auth_failed": "Authentication Failed",
+    "auth_wait": "Authenticating with GitHub...",
+    "auth_wait_desc": "Please wait while we complete the login.",
+    "back_to_dashboard": "Back to Dashboard"
+}

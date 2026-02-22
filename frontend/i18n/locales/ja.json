@@ -1,1 +1,23 @@
-{"hello": "こんにちは、世界", "login": "GitHubでログイン", "dashboard": "ダッシュボード", "scan": "リポジトリをスキャン"}
+{
+    "hello": "こんにちは、世界",
+    "login": "GitHubでログイン",
+    "logout": "ログアウト",
+    "dashboard": "ダッシュボード",
+    "scan": "リポジトリをスキャン",
+    "subtitle": "リポジトリ全体のフレームワークバージョンとEOLステータスを監視します。",
+    "repositories_found": "{count}個のリポジトリ",
+    "no_data": "スキャンされたリポジトリはありません",
+    "no_data_desc": "上の「{scan}」をクリックしてスキャンを開始してください。",
+    "col_repository": "リポジトリ",
+    "col_framework": "フレームワーク",
+    "col_version": "バージョン",
+    "col_status": "ステータス",
+    "col_eol_date": "EOL日付",
+    "col_last_scanned": "最終スキャン日時",
+    "status_eol": "⛔ EOL",
+    "status_supported": "✅ サポート済",
+    "auth_failed": "認証に失敗しました",
+    "auth_wait": "GitHubで認証中...",
+    "auth_wait_desc": "ログインが完了するまでお待ちください。",
+    "back_to_dashboard": "ダッシュボードに戻る"
+}
