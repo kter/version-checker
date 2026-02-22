@@ -2,12 +2,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, List
 
+
 @dataclass
 class Organization:
     id: str
     github_id: int
     name: str
     login: str
+
 
 @dataclass
 class User:
@@ -18,6 +20,7 @@ class User:
     role: str = "member"  # Simple RBAC
     organizations: List[Organization] = field(default_factory=list)
 
+
 @dataclass
 class Repository:
     id: str
@@ -27,6 +30,7 @@ class Repository:
     org_id: Optional[str] = None
     owner_login: str = ""
     default_branch: str = "main"
+
 
 @dataclass
 class EolStatus:
