@@ -22,14 +22,6 @@ export default defineConfig({
         trace: 'on-first-retry',
     },
 
-    /* Run your local dev server before starting the tests */
-    webServer: {
-        command: 'npm run dev',
-        url: 'http://localhost:3000',
-        reuseExistingServer: !process.env.CI,
-        timeout: 120000,
-    },
-
     /* Configure projects for major browsers */
     projects: [
         {
@@ -37,4 +29,10 @@ export default defineConfig({
             use: { ...devices['Desktop Chrome'] },
         },
     ],
+    webServer: {
+        command: 'NUXT_TELEMETRY_DISABLED=1 npm run preview',
+        url: 'http://localhost:3000',
+        reuseExistingServer: !process.env.CI,
+        timeout: 120000,
+    },
 });
