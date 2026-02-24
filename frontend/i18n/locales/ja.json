@@ -19,5 +19,7 @@
     "auth_failed": "認証に失敗しました",
     "auth_wait": "GitHubで認証中...",
     "auth_wait_desc": "ログインが完了するまでお待ちください。",
-    "back_to_dashboard": "ダッシュボードに戻る"
+    "back_to_dashboard": "ダッシュボードに戻る",
+    "organization": "組織 (Organization)",
+    "select_org": "組織を選択してください..."
 }

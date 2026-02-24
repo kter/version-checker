@@ -19,5 +19,7 @@
     "auth_failed": "Authentication Failed",
     "auth_wait": "Authenticating with GitHub...",
     "auth_wait_desc": "Please wait while we complete the login.",
-    "back_to_dashboard": "Back to Dashboard"
+    "back_to_dashboard": "Back to Dashboard",
+    "organization": "Organization",
+    "select_org": "Select an organization..."
 }

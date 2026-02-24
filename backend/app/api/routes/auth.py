@@ -3,6 +3,9 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 import uuid
+import jwt
+
+from app.api.auth_deps import SECRET_KEY, ALGORITHM
 
 from app.infrastructure.config import settings
 from app.infrastructure.database import get_db_session
@@ -89,8 +92,16 @@ async def callback(
         )
         orgs = orgs_res.json()
 
+        # Create JWT Token
+        payload = {
+            "sub": saved_user.id,
+            "gh_id": saved_user.github_id,
+            "ght": access_token  # Storing GitHub token in JWT to use it for later org validation
+        }
+        app_token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
         return {
-            "access_token": access_token,
+            "access_token": app_token,
             "user": {
                 "id": saved_user.id,
                 "username": saved_user.username,

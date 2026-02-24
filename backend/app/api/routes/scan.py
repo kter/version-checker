@@ -5,6 +5,8 @@ from app.usecases.scanner import ScanRepositoryUseCase
 from app.adapters.database_repo import RepoRepository
 from app.adapters.dynamo_repo import DynamoEolCacheRepository
 from app.infrastructure.database import get_db_session
+from app.api.auth_deps import verify_org_access
+from app.domain.entities import User
 
 router = APIRouter(prefix="/api/v1/scan", tags=["Scan"])
 
@@ -21,6 +23,7 @@ async def get_scan_usecase(
 async def get_organization_scan_results(
     org_id: str,
     usecase: ScanRepositoryUseCase = Depends(get_scan_usecase),
+    user: User = Depends(verify_org_access),
 ):
     """Get cached scan results for an organization."""
     try:
@@ -46,6 +49,7 @@ async def get_organization_scan_results(
 async def scan_organization_repos(
     org_id: str,
     usecase: ScanRepositoryUseCase = Depends(get_scan_usecase),
+    user: User = Depends(verify_org_access),
 ):
     """Trigger a new scan for an organization's repos."""
     try:

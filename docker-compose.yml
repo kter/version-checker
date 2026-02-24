@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -13,7 +11,7 @@ services:
       - /app/.venv
       - ~/.aws:/root/.aws:ro  # Mount host AWS credentials (read-only)
     env_file:
-      - .env
+      - .env  # This is a symlink to .env.local, .env.dev, or .env.prd
     environment:
       - AWS_PROFILE=dev       # Force AWS profile to 'dev' inside container
       - ENV=local
@@ -28,9 +26,12 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - node_modules:/app/node_modules
     env_file:
-      - .env
+      - .env  # This is a symlink to .env.local, .env.dev, or .env.prd
     environment:
-      - NUXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
+      - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-http://localhost:8000/api/v1}
     restart: unless-stopped
+
+volumes:
+  node_modules:

@@ -43,7 +43,6 @@ class UserRepository(IUserRepository):
             )
             self.session.add(model)
 
-        await self.session.commit()
         await self.session.refresh(model)
         return model.to_domain()
 
@@ -82,6 +81,5 @@ class RepoRepository(IRepoRepository):
             )
             self.session.add(model)
 
-        await self.session.commit()
         await self.session.refresh(model)
         return model.to_domain()

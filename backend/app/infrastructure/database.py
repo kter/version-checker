@@ -51,6 +51,7 @@ def get_engine():
             get_database_url(),
             echo=(settings.env != "prd"),
             pool_pre_ping=True,
+            isolation_level="AUTOCOMMIT",
         )
 
         @event.listens_for(_engine.sync_engine, "do_connect")

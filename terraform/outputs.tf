@@ -11,3 +11,23 @@ output "dynamodb_table_name" {
 output "env" {
   value = var.env
 }
+
+output "lambda_backend_url" {
+  description = "The URL of the Lambda Backend API"
+  value       = aws_lambda_function_url.backend.function_url
+}
+
+output "cloudfront_distribution_id" {
+  description = "The ID of the CloudFront distribution"
+  value       = aws_cloudfront_distribution.frontend.id
+}
+
+output "cloudfront_domain" {
+  description = "The domain name of the CloudFront distribution"
+  value       = aws_cloudfront_distribution.frontend.domain_name
+}
+
+output "s3_bucket_name" {
+  description = "The name of the S3 bucket for frontend"
+  value       = aws_s3_bucket.frontend.id
+}

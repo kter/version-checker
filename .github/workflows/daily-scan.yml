@@ -1,0 +1,55 @@
+name: Daily Version Checker Scan
+
+on:
+  schedule:
+    # Run at 17:00 UTC every day (02:00 JST)
+    - cron: '0 17 * * *'
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  run-daily-scan:
+    runs-on: ubuntu-latest
+    
+    # Needs permissions to configure AWS credentials if using OIDC
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # In a real environment, you would use role-to-assume with OIDC.
+          # Here we assume AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set in GitHub Secrets.
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-1
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          
+      - name: Install Poetry
+        run: curl -sSL https://install.python-poetry.org | python3 -
+
+      - name: Install Dependencies
+        working-directory: ./backend
+        run: |
+          $HOME/.local/bin/poetry install
+
+      - name: Execute Daily Scan Script
+        working-directory: ./backend
+        env:
+          ENV: prd # Or 'dev', assuming secrets are mapped appropriately
+          # Required connection secrets to allow SQLAlchemy and Boto3 to function
+          DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
+          DYNAMODB_TABLE: ${{ secrets.DYNAMODB_TABLE }}
+          GITHUB_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+        run: |
+          $HOME/.local/bin/poetry run python scripts/run_daily_scan.py

@@ -3,7 +3,9 @@
 
 # Environments
 .env
-.env.*
+.env.dev
+.env.prd
+!.env.local
 !.env.example
 
 # IDEs
