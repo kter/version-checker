@@ -55,3 +55,25 @@ class TestSettings:
             assert s.aws_region == "ap-northeast-1"
             assert s.github_client_id is None
             assert s.github_client_secret is None
+            assert s.frontend_base_url == "http://localhost:3000"
+            assert s.github_redirect_uri == "http://localhost:3000/auth/callback"
+            assert s.cors_allow_origins_list == ["http://localhost:3000"]
+
+    def test_cors_allow_origins_list(self):
+        from app.infrastructure.config import Settings
+
+        s = Settings(
+            dsql_endpoint="",
+            dynamo_table="test-table",
+            frontend_base_url="https://version-check.dev.devtools.site",
+            cors_allow_origins="http://localhost:3000, https://version-check.dev.devtools.site",
+        )
+
+        assert (
+            s.github_redirect_uri
+            == "https://version-check.dev.devtools.site/auth/callback"
+        )
+        assert s.cors_allow_origins_list == [
+            "http://localhost:3000",
+            "https://version-check.dev.devtools.site",
+        ]

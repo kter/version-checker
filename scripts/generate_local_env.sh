@@ -48,6 +48,10 @@ DSQL_ENDPOINT=$DSQL_ENDPOINT
 
 # Cache Configuration
 DYNAMO_TABLE=$DYNAMO_TABLE
+
+# Frontend + CORS
+FRONTEND_BASE_URL=http://localhost:3000
+CORS_ALLOW_ORIGINS=http://localhost:3000
 EOF
 
 # Append preserved manual settings
@@ -59,4 +63,3 @@ fi
 
 echo "$ENV_FILE generated successfully."
 cat $ENV_FILE
-

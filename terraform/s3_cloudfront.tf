@@ -133,7 +133,7 @@ resource "aws_s3_bucket_policy" "frontend" {
 # Get all certificates and filter by most recent wildcard certificate
 data "aws_acm_certificate" "custom_domain" {
   count    = var.domain_name != "" ? 1 : 0
-  domain   = "dev.devtools.site" # Search for base domain
+  domain   = local.frontend_certificate_lookup_domain
   statuses = ["ISSUED"]
   provider = aws.us_east_1
 
@@ -158,7 +158,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   default_root_object = "index.html"
 
   # Custom domain (optional)
-  aliases = var.domain_name != "" ? [var.domain_name] : []
+  aliases = var.domain_name != "" ? [local.frontend_domain_name] : []
 
   # Viewer certificate
   viewer_certificate {

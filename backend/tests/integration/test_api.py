@@ -51,6 +51,9 @@ class TestAuthEndpoints:
         with patch("app.api.routes.auth.settings") as mock_settings:
             mock_settings.github_client_id = "test-client-id"
             mock_settings.github_client_secret = "test-secret"
+            mock_settings.github_redirect_uri = (
+                "https://version-check.dev.devtools.site/auth/callback"
+            )
 
             transport = ASGITransport(app=app_with_mocks)
             async with AsyncClient(
@@ -62,6 +65,10 @@ class TestAuthEndpoints:
             location = response.headers["location"]
             assert "github.com/login/oauth/authorize" in location
             assert "client_id=test-client-id" in location
+            assert (
+                "redirect_uri=https%3A%2F%2Fversion-check.dev.devtools.site%2Fauth%2Fcallback"
+                in location
+            )
 
     @pytest.mark.asyncio
     async def test_login_fails_without_credentials(self, app_with_mocks):

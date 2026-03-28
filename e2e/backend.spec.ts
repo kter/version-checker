@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Version Checker Backend API', () => {
-  const baseURL = 'https://s5jrluvwfn66cxzr52nveb7hym0ajspj.lambda-url.ap-northeast-1.on.aws/api/v1';
+  const baseURL = process.env.API_BASE_URL || 'https://api.version-check.dev.devtools.site';
 
   test('health check', async ({ request }) => {
     const response = await request.get(`${baseURL}/health`);
@@ -9,7 +9,12 @@ test.describe('Version Checker Backend API', () => {
   });
 
   test('should return CORS headers', async ({ request }) => {
-    const response = await request.get(`${baseURL}/`);
+    const response = await request.get(`${baseURL}/health`, {
+      headers: {
+        Origin: 'https://version-check.dev.devtools.site',
+      },
+    });
+
     expect(response.headers()['access-control-allow-origin']).toContain('version-check.dev.devtools.site');
   });
 });

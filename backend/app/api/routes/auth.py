@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 import uuid
 import jwt
+import logging
+from urllib.parse import urlencode
 
 from app.api.auth_deps import SECRET_KEY, ALGORITHM
 
@@ -13,8 +15,7 @@ from app.adapters.database_repo import OrgRepository, UserRepository
 from app.domain.entities import Organization, User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
-
-REDIRECT_URI = "http://localhost:3000/auth/callback"
+logger = logging.getLogger(__name__)
 
 
 @router.get("/login")
@@ -22,11 +23,12 @@ async def login():
     if not settings.github_client_id:
         raise HTTPException(status_code=500, detail="OAuth credentials not configured")
 
-    github_auth_url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={settings.github_client_id}"
-        f"&redirect_uri={REDIRECT_URI}"
-        f"&scope=read:org,repo"
+    github_auth_url = "https://github.com/login/oauth/authorize?" + urlencode(
+        {
+            "client_id": settings.github_client_id,
+            "redirect_uri": settings.github_redirect_uri,
+            "scope": "read:org,repo",
+        }
     )
     return RedirectResponse(github_auth_url)
 
@@ -48,12 +50,21 @@ async def callback(
                 "client_id": settings.github_client_id,
                 "client_secret": settings.github_client_secret,
                 "code": code,
-                "redirect_uri": REDIRECT_URI,
+                "redirect_uri": settings.github_redirect_uri,
             },
         )
         token_data = token_res.json()
 
         if "error" in token_data:
+            logger.warning(
+                "GitHub token exchange failed: status=%s error=%s description=%s redirect_uri=%s client_id_suffix=%s code_len=%s",
+                token_res.status_code,
+                token_data.get("error"),
+                token_data.get("error_description"),
+                settings.github_redirect_uri,
+                (settings.github_client_id or "")[-6:],
+                len(code),
+            )
             raise HTTPException(
                 status_code=400,
                 detail=token_data.get("error_description", token_data["error"]),

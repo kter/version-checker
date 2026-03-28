@@ -20,6 +20,11 @@ variable "github_client_id" {
   description = "GitHub OAuth Client ID"
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.env == "local" || trimspace(var.github_client_id) != ""
+    error_message = "github_client_id must be set for dev and prd deployments."
+  }
 }
 
 variable "github_client_secret" {
@@ -27,6 +32,11 @@ variable "github_client_secret" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.env == "local" || trimspace(var.github_client_secret) != ""
+    error_message = "github_client_secret must be set for dev and prd deployments."
+  }
 }
 
 variable "domain_name" {

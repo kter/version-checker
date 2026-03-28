@@ -12,6 +12,8 @@ class Settings(BaseSettings):
 
     github_client_id: Optional[str] = None
     github_client_secret: Optional[str] = None
+    frontend_base_url: str = "http://localhost:3000"
+    cors_allow_origins: str = "http://localhost:3000"
 
     @property
     def dsql_hostname(self) -> str:
@@ -25,6 +27,18 @@ class Settings(BaseSettings):
                 region = endpoint.split(":")[3]
                 return f"{cluster_id}.dsql.{region}.on.aws"
         return endpoint
+
+    @property
+    def github_redirect_uri(self) -> str:
+        return f"{self.frontend_base_url.rstrip('/')}/auth/callback"
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
 
     class Config:
         env_file = ".env"
