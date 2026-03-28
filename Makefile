@@ -44,16 +44,23 @@ setup-prd:
 # Build Lambda deployment package
 build-lambda:
 	@echo "Building Lambda deployment package..."
-	cd backend && \
-	zip -r ../terraform/backend_lambda.zip . \
-		-x \*.pyc \*.pyo \*.pyd \
-		-x __pycache__/\* \
-		-x .pytest_cache/\* \
-		-x .venv/\* venv/\* env/\* \
-		-x .coverage \*htmlcov \*.pytest_cache \
-		-x node_modules/\* \
-		-x .git/\* \
-		-x \*.zip
+	@set -e; \
+	BUILD_DIR=$$(mktemp -d /tmp/version-checker-lambda-build.XXXXXX); \
+	trap 'rm -rf "$$BUILD_DIR"' EXIT; \
+	python3 -c "import tomllib; data = tomllib.load(open('backend/pyproject.toml', 'rb')); print('\n'.join(data['project']['dependencies']))" > "$$BUILD_DIR/requirements.txt"; \
+	docker run --rm \
+		--user "$$(id -u):$$(id -g)" \
+		-e HOME=/tmp \
+		-v "$$BUILD_DIR:/build" \
+		python:3.12-slim \
+		sh -lc "pip install --default-timeout=120 --retries 5 --no-cache-dir -r /build/requirements.txt -t /build"; \
+	cp -R backend/app "$$BUILD_DIR/"; \
+	cp backend/lambda_handler.py "$$BUILD_DIR/"; \
+	rm -f "$$BUILD_DIR/requirements.txt"; \
+	find "$$BUILD_DIR" -type d \( -name __pycache__ -o -name tests -o -name testing \) -prune -exec rm -rf {} +; \
+	find "$$BUILD_DIR" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete; \
+	rm -f "$(CURDIR)/terraform/backend_lambda.zip"; \
+	cd "$$BUILD_DIR" && zip -qr "$(CURDIR)/terraform/backend_lambda.zip" .
 	@echo "Lambda package built: terraform/backend_lambda.zip"
 
 # Deploy Lambda function only
@@ -63,12 +70,14 @@ deploy-lambda:
 		echo "Error: Please specify ENV=dev|prd"; \
 		exit 1; \
 	fi
+	$(MAKE) build-lambda
 	cd terraform && terraform workspace select $(ENV) || terraform workspace new $(ENV)
 	cd terraform && terraform apply -var="env=$(ENV)" -target=aws_lambda_function.backend -auto-approve
 	@echo "Lambda deployed."
 
 # Deploy to AWS dev environment (full infrastructure)
 deploy-dev:
+	$(MAKE) build-lambda
 	cd terraform && terraform init && \
 	terraform workspace select dev || terraform workspace new dev && \
 	terraform apply -var="env=dev" -auto-approve
@@ -77,6 +86,7 @@ deploy-dev:
 
 # Deploy to AWS prd environment (full infrastructure)
 deploy-prd:
+	$(MAKE) build-lambda
 	cd terraform && terraform init && \
 	terraform workspace select prd || terraform workspace new prd && \
 	terraform apply -var="env=prd" -auto-approve

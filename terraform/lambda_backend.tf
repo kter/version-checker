@@ -2,27 +2,6 @@
 # Lambda Backend (FastAPI)
 # ============================================
 
-# Build the Lambda deployment package
-data "archive_file" "backend_lambda" {
-  type        = "zip"
-  source_dir  = "${path.module}/../backend" # Adjust path to your backend directory
-  output_path = "${path.module}/backend_lambda.zip"
-
-  # Exclude unnecessary files
-  excludes = [
-    "__pycache__",
-    ".pytest_cache",
-    ".venv",
-    "venv",
-    "node_modules",
-    ".git",
-    "*.pyc",
-    ".coverage",
-    "htmlcov",
-    ".pytest_cache",
-  ]
-}
-
 # IAM Role for Lambda
 resource "aws_iam_role" "backend_lambda" {
   name = "${var.project}-${var.env}-backend-lambda-role"
@@ -65,7 +44,8 @@ resource "aws_iam_role_policy" "backend_lambda" {
       {
         Effect = "Allow"
         Action = [
-          "rds-db:connect",
+          "dsql:DbConnect",
+          "dsql:DbConnectAdmin",
         ]
         Resource = aws_dsql_cluster.main.arn
       },
@@ -95,8 +75,8 @@ resource "aws_lambda_function" "backend" {
   description   = "Version Checker Backend API (FastAPI)"
 
   # Source code archive
-  filename         = data.archive_file.backend_lambda.output_path
-  source_code_hash = data.archive_file.backend_lambda.output_base64sha256
+  filename         = "${path.module}/backend_lambda.zip"
+  source_code_hash = filebase64sha256("${path.module}/backend_lambda.zip")
 
   # Runtime configuration
   runtime = "python3.12"
@@ -111,6 +91,8 @@ resource "aws_lambda_function" "backend" {
       DYNAMO_TABLE         = aws_dynamodb_table.cache.name
       GITHUB_CLIENT_ID     = var.github_client_id
       GITHUB_CLIENT_SECRET = var.github_client_secret
+      FRONTEND_BASE_URL    = local.frontend_base_url
+      CORS_ALLOW_ORIGINS   = join(",", local.cors_allow_origins)
       # Note: AWS_REGION is reserved by Lambda, use default region
     }
   }

@@ -14,8 +14,8 @@ sys.path.insert(0, str(backend_dir))
 from mangum import Mangum
 from app.main import app
 
-# Create ASGI handler
-handler = Mangum(app, lifespan="off")
+# Run FastAPI lifespan hooks on Lambda cold start so DB initialization executes.
+handler = Mangum(app, lifespan="auto")
 
 
 def lambda_handler(event, context):
