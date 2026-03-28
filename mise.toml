@@ -1,0 +1,8 @@
+[tools]
+node = "24.14.0"
+python = "3.12.3"
+terraform = "1"
+"awscli" = "latest"
+uv = "latest"
+"pipx:poetry" = "latest"
+lefthook = "latest"

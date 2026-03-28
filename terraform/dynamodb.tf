@@ -1,8 +1,8 @@
 resource "aws_dynamodb_table" "cache" {
-  name           = "${var.project}-${var.env}-eol-cache"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "pk"
-  range_key      = "sk"
+  name         = "${var.project}-${var.env}-eol-cache"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+  range_key    = "sk"
 
   attribute {
     name = "pk"
@@ -32,8 +32,8 @@ resource "aws_iam_policy" "dynamodb_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
           "dynamodb:Scan",

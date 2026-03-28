@@ -91,3 +91,105 @@ deploy-frontend:
 	fi
 	chmod +x ./scripts/deploy_frontend.sh
 	./scripts/deploy_frontend.sh $(ENV)
+
+BACKEND_PATH ?= .
+FRONTEND_PATH ?= .
+TERRAFORM_PATH ?= .
+
+.PHONY: test
+test: test-unit test-lint
+
+.PHONY: test-unit
+test-unit: test-unit-backend test-unit-frontend
+
+.PHONY: test-unit-backend
+test-unit-backend:
+	cd backend && poetry run pytest tests/unit
+
+.PHONY: test-unit-frontend
+test-unit-frontend:
+	cd frontend && npm run test:unit
+
+.PHONY: test-integration
+test-integration:
+	cd backend && poetry run pytest tests/integration
+
+.PHONY: stop-hook-unit-tests
+stop-hook-unit-tests: test-unit
+
+.PHONY: lint-backend
+lint-backend:
+	@target="$(BACKEND_PATH)"; \
+	if [ "$$target" = "." ]; then \
+		set -- app tests lambda_handler.py; \
+	else \
+		set -- "$$target"; \
+	fi; \
+	cd backend && poetry run python -m compileall "$$@"
+
+.PHONY: lint-frontend
+lint-frontend:
+	cd frontend && npx nuxi typecheck
+
+.PHONY: test-lint
+test-lint: lint-backend lint-frontend
+
+.PHONY: format
+format: format-backend format-frontend format-terraform
+
+.PHONY: format-check
+format-check: format-check-backend format-check-frontend format-check-terraform
+
+.PHONY: format-backend
+format-backend:
+	cd backend && poetry run black $(BACKEND_PATH)
+
+.PHONY: format-check-backend
+format-check-backend:
+	cd backend && poetry run black --check $(BACKEND_PATH)
+
+.PHONY: format-frontend
+format-frontend:
+	@echo "No frontend formatter configured; skipping."
+
+.PHONY: format-check-frontend
+format-check-frontend:
+	@echo "No frontend formatter configured; skipping."
+
+.PHONY: format-terraform
+format-terraform:
+	cd terraform && terraform fmt $(TERRAFORM_PATH)
+
+.PHONY: format-check-terraform
+format-check-terraform:
+	cd terraform && terraform fmt -check $(TERRAFORM_PATH)
+
+.PHONY: claude-post-tool-use
+claude-post-tool-use:
+	@if [ -z "$(FILE_PATH)" ]; then \
+		echo "FILE_PATH is required"; \
+		exit 1; \
+	fi
+	@file_path="$(FILE_PATH)"; \
+	case "$$file_path" in \
+		backend/*.py) \
+			rel_path="$${file_path#backend/}"; \
+			$(MAKE) --no-print-directory format-backend BACKEND_PATH="$$rel_path" && \
+			$(MAKE) --no-print-directory lint-backend BACKEND_PATH="$$rel_path" ;; \
+		frontend/*.js|frontend/*.jsx|frontend/*.ts|frontend/*.tsx|frontend/*.vue) \
+			$(MAKE) --no-print-directory lint-frontend ;; \
+		terraform/*.tf|terraform/*.tfvars) \
+			rel_path="$${file_path#terraform/}"; \
+			$(MAKE) --no-print-directory format-terraform TERRAFORM_PATH="$$rel_path" ;; \
+		*) \
+			true ;; \
+	esac
+
+.PHONY: claude-pre-tool-use
+claude-pre-tool-use:
+	@python3 scripts/claude_pre_tool_use_guard.py
+
+.PHONY: install-hooks
+install-hooks:
+	mise exec -- lefthook install
+	@echo "Git hooks installed via lefthook."

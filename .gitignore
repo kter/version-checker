@@ -14,6 +14,11 @@
 *.swp
 *.swo
 
+# Claude / Playwright artifacts
+.playwright-cli/
+playwright-report/
+test-results/
+
 # Python / Backend
 backend/__pycache__/
 backend/.pytest_cache/

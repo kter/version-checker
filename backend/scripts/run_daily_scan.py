@@ -1,20 +1,25 @@
 import asyncio
 import logging
 from app.infrastructure.database import get_engine, async_sessionmaker
-from app.adapters.database_repo import EolStatusRepository, OrgRepository, RepoRepository
+from app.adapters.database_repo import (
+    EolStatusRepository,
+    OrgRepository,
+    RepoRepository,
+)
 from app.usecases.scanner import ScanRepositoryUseCase
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def run_daily_scan():
     logger.info("Starting Daily Framework Version Scan...")
-    
+
     engine = get_engine()
     AsyncSessionLocal = async_sessionmaker(
         engine, expire_on_commit=False, autocommit=False, autoflush=False
     )
-    
+
     async with AsyncSessionLocal() as session:
         org_repository = OrgRepository(session)
         organizations = await org_repository.find_all_with_tokens()
@@ -52,6 +57,7 @@ async def run_daily_scan():
                 logger.error("Failed to scan organization %s: %s", org.login, str(e))
 
     logger.info("Daily scan completed successfully.")
+
 
 if __name__ == "__main__":
     asyncio.run(run_daily_scan())

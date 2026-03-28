@@ -1,6 +1,6 @@
 terraform {
   required_version = ">= 1.5.0"
-  
+
   backend "local" {
     # Using local backend for simplicity, but simulating a remote state via workspaces.
     path = "terraform.tfstate"

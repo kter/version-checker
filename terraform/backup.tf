@@ -33,7 +33,7 @@ resource "aws_backup_plan" "daily" {
     rule_name         = "daily-backup-rule"
     target_vault_name = aws_backup_vault.main.name
     schedule          = "cron(0 17 * * ? *)" # 17:00 UTC -> 02:00 JST
-    
+
     lifecycle {
       delete_after = 7 # 7 days retention
     }

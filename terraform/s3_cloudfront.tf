@@ -20,8 +20,8 @@ resource "aws_iam_policy" "s3_frontend_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "s3:PutObject",
           "s3:GetObject",
           "s3:DeleteObject",
@@ -63,7 +63,7 @@ resource "aws_s3_bucket_website_configuration" "frontend" {
   }
 
   error_document {
-    key = "index.html"  # SPA: all routes return index.html
+    key = "index.html" # SPA: all routes return index.html
   }
 }
 
@@ -93,13 +93,13 @@ resource "aws_s3_bucket_policy" "frontend" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid       = "AllowCloudFrontAccess"
-        Effect    = "Allow"
+        Sid    = "AllowCloudFrontAccess"
+        Effect = "Allow"
         Principal = {
           Service = "cloudfront.amazonaws.com"
         }
-        Action    = "s3:GetObject"
-        Resource  = "${aws_s3_bucket.frontend.arn}/*"
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.frontend.arn}/*"
         Condition = {
           StringEquals = {
             "AWS:SourceArn" = aws_cloudfront_distribution.frontend.arn
@@ -108,12 +108,12 @@ resource "aws_s3_bucket_policy" "frontend" {
       },
       # Allow AWS account users to deploy (for development)
       {
-        Sid       = "AllowDeployment"
-        Effect    = "Allow"
+        Sid    = "AllowDeployment"
+        Effect = "Allow"
         Principal = {
           AWS = "arn:aws:iam::848738341109:user/kter"
         }
-        Action    = [
+        Action = [
           "s3:PutObject",
           "s3:GetObject",
           "s3:DeleteObject",
@@ -132,8 +132,8 @@ resource "aws_s3_bucket_policy" "frontend" {
 # Note: Certificate must be in us-east-1 for CloudFront
 # Get all certificates and filter by most recent wildcard certificate
 data "aws_acm_certificate" "custom_domain" {
-  count   = var.domain_name != "" ? 1 : 0
-  domain   = "dev.devtools.site"  # Search for base domain
+  count    = var.domain_name != "" ? 1 : 0
+  domain   = "dev.devtools.site" # Search for base domain
   statuses = ["ISSUED"]
   provider = aws.us_east_1
 
@@ -154,17 +154,17 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
   is_ipv6_enabled     = true
-  price_class          = "PriceClass_100"  # US, Canada, Europe (cheaper)
+  price_class         = "PriceClass_100" # US, Canada, Europe (cheaper)
   default_root_object = "index.html"
 
   # Custom domain (optional)
-  aliases             = var.domain_name != "" ? [var.domain_name] : []
+  aliases = var.domain_name != "" ? [var.domain_name] : []
 
   # Viewer certificate
   viewer_certificate {
-    acm_certificate_arn      = var.domain_name != "" ? data.aws_acm_certificate.custom_domain[0].arn : ""
-    ssl_support_method       = "sni-only"
-    minimum_protocol_version = "TLSv1.2_2021"
+    acm_certificate_arn            = var.domain_name != "" ? data.aws_acm_certificate.custom_domain[0].arn : ""
+    ssl_support_method             = "sni-only"
+    minimum_protocol_version       = "TLSv1.2_2021"
     cloudfront_default_certificate = var.domain_name == ""
   }
 
@@ -190,8 +190,8 @@ resource "aws_cloudfront_distribution" "frontend" {
 
     viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
-    default_ttl            = 86400  # 24 hours
-    max_ttl                = 31536000  # 1 year
+    default_ttl            = 86400    # 24 hours
+    max_ttl                = 31536000 # 1 year
     compress               = true
   }
 
@@ -224,7 +224,7 @@ resource "aws_cloudfront_distribution" "frontend" {
 # ============================================
 
 provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
+  alias   = "us_east_1"
+  region  = "us-east-1"
   profile = var.env == "local" ? "dev" : var.env
 }

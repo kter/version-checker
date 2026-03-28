@@ -5,7 +5,7 @@
 # Build the Lambda deployment package
 data "archive_file" "backend_lambda" {
   type        = "zip"
-  source_dir  = "${path.module}/../backend"  # Adjust path to your backend directory
+  source_dir  = "${path.module}/../backend" # Adjust path to your backend directory
   output_path = "${path.module}/backend_lambda.zip"
 
   # Exclude unnecessary files
@@ -54,8 +54,8 @@ resource "aws_iam_role_policy" "backend_lambda" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "dynamodb:GetItem",
           "dynamodb:PutItem",
           "dynamodb:Query",
@@ -63,16 +63,16 @@ resource "aws_iam_role_policy" "backend_lambda" {
         Resource = aws_dynamodb_table.cache.arn
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "rds-db:connect",
         ]
         Resource = aws_dsql_cluster.main.arn
       },
       # Allow Lambda to write logs
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
@@ -99,17 +99,17 @@ resource "aws_lambda_function" "backend" {
   source_code_hash = data.archive_file.backend_lambda.output_base64sha256
 
   # Runtime configuration
-  runtime          = "python3.12"
-  handler          = "lambda_handler.lambda_handler"
-  role             = aws_iam_role.backend_lambda.arn
+  runtime = "python3.12"
+  handler = "lambda_handler.lambda_handler"
+  role    = aws_iam_role.backend_lambda.arn
 
   # Environment variables
   environment {
     variables = {
-      ENV              = var.env
-      DSQL_ENDPOINT    = aws_dsql_cluster.main.arn
-      DYNAMO_TABLE     = aws_dynamodb_table.cache.name
-      GITHUB_CLIENT_ID = var.github_client_id
+      ENV                  = var.env
+      DSQL_ENDPOINT        = aws_dsql_cluster.main.arn
+      DYNAMO_TABLE         = aws_dynamodb_table.cache.name
+      GITHUB_CLIENT_ID     = var.github_client_id
       GITHUB_CLIENT_SECRET = var.github_client_secret
       # Note: AWS_REGION is reserved by Lambda, use default region
     }
@@ -129,7 +129,7 @@ resource "aws_lambda_function" "backend" {
 # Lambda Function URL (Direct HTTPS access)
 resource "aws_lambda_function_url" "backend" {
   function_name      = aws_lambda_function.backend.function_name
-  authorization_type = "NONE"  # Add auth via API Gateway if needed
+  authorization_type = "NONE" # Add auth via API Gateway if needed
 
   cors {
     allow_origins = ["*"]
