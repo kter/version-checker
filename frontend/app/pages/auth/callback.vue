@@ -29,18 +29,33 @@ const route = useRoute()
 const router = useRouter()
 const config = useRuntimeConfig()
 const error = ref('')
+const isExchanging = ref(false)
 
 onMounted(async () => {
-  const code = route.query.code
+  const rawCode = Array.isArray(route.query.code) ? route.query.code[0] : route.query.code
+  const code = typeof rawCode === 'string' ? rawCode : ''
+
   if (!code) {
     error.value = 'No authentication code provided'
     return
   }
 
+  // Guard against duplicate client-side exchanges for the same one-time GitHub code.
+  const exchangeKey = `github_oauth_exchange:${code}`
+  if (sessionStorage.getItem(exchangeKey)) {
+    error.value = 'This authentication response was already used. Please start login again.'
+    return
+  }
+
   try {
-    const response = await $fetch(`${config.public.apiBase}/auth/callback?code=${code}`)
+    isExchanging.value = true
+    sessionStorage.setItem(exchangeKey, 'in-flight')
+    const response = await $fetch(`${config.public.apiBase}/auth/callback`, {
+      query: { code }
+    })
 
     if (response.access_token) {
+      sessionStorage.setItem(exchangeKey, 'done')
       localStorage.setItem('auth_token', response.access_token)
       localStorage.setItem('auth_user', response.user?.username || 'User')
 
@@ -50,10 +65,14 @@ onMounted(async () => {
 
       router.push('/')
     } else {
+      sessionStorage.removeItem(exchangeKey)
       error.value = response.message || 'Authentication failed'
     }
   } catch (err) {
+    sessionStorage.removeItem(exchangeKey)
     error.value = err.data?.detail || err.message || 'Failed to authenticate'
+  } finally {
+    isExchanging.value = false
   }
 })
 </script>
