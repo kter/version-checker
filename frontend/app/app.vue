@@ -74,24 +74,22 @@
 <script setup>
 const { locale, locales, setLocale } = useI18n()
 const availableLocales = computed(() => locales.value)
+const { isAuthenticated, username, syncFromStorage, clearAuth } = useAuth()
 
 useHead({
   title: 'Version Checker'
 })
 
-const isAuthenticated = ref(false)
-const username = ref('')
-
 const config = useRuntimeConfig()
 
 // Check auth state on mount
 onMounted(() => {
-  const token = localStorage.getItem('auth_token')
-  const storedUser = localStorage.getItem('auth_user')
-  if (token && storedUser) {
-    isAuthenticated.value = true
-    username.value = storedUser
-  }
+  syncFromStorage()
+  window.addEventListener('storage', syncFromStorage)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('storage', syncFromStorage)
 })
 
 const login = () => {
@@ -99,9 +97,6 @@ const login = () => {
 }
 
 const logout = () => {
-  localStorage.removeItem('auth_token')
-  localStorage.removeItem('auth_user')
-  isAuthenticated.value = false
-  username.value = ''
+  clearAuth()
 }
 </script>

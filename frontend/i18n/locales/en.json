@@ -19,7 +19,13 @@
     "auth_failed": "Authentication Failed",
     "auth_wait": "Authenticating with GitHub...",
     "auth_wait_desc": "Please wait while we complete the login.",
+    "auth_missing_code": "No authentication code provided.",
+    "auth_code_already_used": "This authentication response was already used. Please start login again.",
+    "auth_generic_failure": "Authentication failed.",
+    "auth_load_failed": "Failed to authenticate.",
     "back_to_dashboard": "Back to Dashboard",
+    "default_user": "User",
     "organization": "Organization",
-    "select_org": "Select an organization..."
+    "select_org": "Select an organization...",
+    "loading_repositories": "Loading repositories..."
 }

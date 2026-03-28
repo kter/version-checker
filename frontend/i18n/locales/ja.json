@@ -19,7 +19,13 @@
     "auth_failed": "認証に失敗しました",
     "auth_wait": "GitHubで認証中...",
     "auth_wait_desc": "ログインが完了するまでお待ちください。",
+    "auth_missing_code": "認証コードが見つかりません。",
+    "auth_code_already_used": "この認証レスポンスはすでに使用済みです。もう一度ログインしてください。",
+    "auth_generic_failure": "認証に失敗しました。",
+    "auth_load_failed": "認証処理に失敗しました。",
     "back_to_dashboard": "ダッシュボードに戻る",
+    "default_user": "ユーザー",
     "organization": "組織 (Organization)",
-    "select_org": "組織を選択してください..."
+    "select_org": "組織を選択してください...",
+    "loading_repositories": "リポジトリを読み込んでいます..."
 }

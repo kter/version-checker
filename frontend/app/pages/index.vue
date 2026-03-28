@@ -19,6 +19,7 @@
           :items="userOrgs"
           option-attribute="login"
           value-attribute="login"
+          :placeholder="$t('select_org')"
           class="w-full sm:w-64"
           size="lg"
           @update:model-value="val => { selectedOrg = val; onOrgChange() }"
@@ -116,46 +117,61 @@
     <!-- Loading Overlay -->
     <div v-if="isLoading && repositories.length === 0" class="py-24 text-center">
       <UIcon name="i-heroicons-arrow-path" class="w-10 h-10 animate-spin text-indigo-500 mx-auto mb-4" />
-      <p class="text-gray-500 dark:text-gray-400">Loading repositories...</p>
+      <p class="text-gray-500 dark:text-gray-400">{{ $t('loading_repositories') }}</p>
     </div>
   </div>
 </template>
 
 <script setup>
 const config = useRuntimeConfig()
+const { organizations, syncFromStorage } = useAuth()
 const isScanning = ref(false)
 const isLoading = ref(false)
 const error = ref('')
 const repositories = ref([])
 
-const userOrgs = ref([])
+const userOrgs = computed(() => organizations.value)
 const selectedOrg = ref('')
 
 const { t } = useI18n()
 
-onMounted(() => {
-  const orgs = localStorage.getItem('auth_orgs')
-  if (orgs) {
-    try {
-      userOrgs.value = JSON.parse(orgs)
-      if (userOrgs.value.length > 0) {
-        selectedOrg.value = userOrgs.value[0].login
-        loadData()
-      }
-    } catch (e) {
-      console.error("Failed to parse orgs", e)
-    }
+function initializeSelectedOrg() {
+  if (userOrgs.value.length === 0) {
+    selectedOrg.value = ''
+    repositories.value = []
+    return
   }
-})
 
-const onOrgChange = () => {
+  const orgStillSelected = userOrgs.value.some(org => org.login === selectedOrg.value)
+  if (!orgStillSelected) {
+    selectedOrg.value = userOrgs.value[0].login
+  }
+
   if (selectedOrg.value) {
     loadData()
   }
 }
 
-const loadData = async () => {
-  if (!selectedOrg.value) return;
+onMounted(() => {
+  syncFromStorage()
+})
+
+watch(
+  userOrgs,
+  () => {
+    initializeSelectedOrg()
+  },
+  { deep: true, immediate: true }
+)
+
+function onOrgChange() {
+  if (selectedOrg.value) {
+    loadData()
+  }
+}
+
+async function loadData() {
+  if (!selectedOrg.value) return
   isLoading.value = true
   error.value = ''
   repositories.value = []
@@ -176,8 +192,8 @@ const loadData = async () => {
   }
 }
 
-const scanOrganization = async () => {
-  if (!selectedOrg.value) return;
+async function scanOrganization() {
+  if (!selectedOrg.value) return
   isScanning.value = true
   error.value = ''
   try {
