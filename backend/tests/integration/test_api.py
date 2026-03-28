@@ -6,7 +6,7 @@ These tests use mocked dependencies to avoid needing real AWS/DB connections.
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import AsyncClient, ASGITransport
-from app.domain.entities import Repository, EolStatus
+from app.domain.entities import Repository, EolStatus, User
 from datetime import datetime
 
 
@@ -95,41 +95,88 @@ class TestAuthEndpoints:
 class TestScanEndpoints:
     @pytest.mark.asyncio
     async def test_get_scan_results_empty(self, app_with_mocks, mock_db_session):
-        # Mock the repo repository to return empty list
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_db_session.execute.return_value = mock_result
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_usecase
 
-        # Mock the DynamoDB cache
-        with patch("app.api.routes.scan.DynamoEolCacheRepository") as MockCache:
-            MockCache.return_value = AsyncMock()
-            MockCache.return_value.get_eol_status.return_value = []
+        fake_usecase = MagicMock()
+        fake_usecase.get_saved_results = AsyncMock(return_value=[])
+        fake_usecase.repo_repository = MagicMock()
+        fake_usecase.repo_repository.find_by_org = AsyncMock(return_value=[])
 
-            transport = ASGITransport(app=app_with_mocks)
-            async with AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                response = await client.get("/api/v1/scan/orgs/test-org")
+        async def override_usecase():
+            return fake_usecase
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_usecase] = override_usecase
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/scan/orgs/test-org")
 
         assert response.status_code == 200
         assert response.json() == {"statuses": []}
 
     @pytest.mark.asyncio
     async def test_post_scan_triggers_scan(self, app_with_mocks, mock_db_session):
-        # Mock the repo repository to return empty list
-        mock_result = MagicMock()
-        mock_result.scalars.return_value.all.return_value = []
-        mock_db_session.execute.return_value = mock_result
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_usecase
 
-        with patch("app.api.routes.scan.DynamoEolCacheRepository") as MockCache:
-            MockCache.return_value = AsyncMock()
-            MockCache.return_value.get_eol_status.return_value = []
+        status = EolStatus(
+            repo_id="repo-1",
+            framework_name="Nuxt",
+            current_version="3.16.0",
+            is_eol=False,
+            last_scanned_at=datetime(2026, 3, 28, 12, 0, 0),
+            source_path="apps/web/package.json",
+        )
+        fake_usecase = MagicMock()
+        fake_usecase.execute = AsyncMock(return_value=[status])
+        fake_usecase.repo_repository = MagicMock()
+        fake_usecase.repo_repository.find_by_org = AsyncMock(
+            return_value=[
+                Repository(
+                    id="repo-1",
+                    github_id=1,
+                    name="web",
+                    full_name="test-org/web",
+                    org_id="test-org",
+                    owner_login="test-org",
+                    default_branch="main",
+                )
+            ]
+        )
 
-            transport = ASGITransport(app=app_with_mocks)
-            async with AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                response = await client.post("/api/v1/scan/orgs/test-org")
+        async def override_usecase():
+            return fake_usecase
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_usecase] = override_usecase
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/v1/scan/orgs/test-org")
 
         assert response.status_code == 200
-        assert response.json() == {"statuses": []}
+        assert response.json() == {
+            "statuses": [
+                {
+                    "repo_id": "test-org/web",
+                    "framework": "Nuxt",
+                    "version": "3.16.0",
+                    "is_eol": False,
+                    "eol_date": None,
+                    "last_scanned_at": "2026-03-28T12:00:00",
+                    "source_path": "apps/web/package.json",
+                }
+            ]
+        }

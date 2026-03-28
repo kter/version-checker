@@ -44,6 +44,7 @@ _async_session_maker = None
 
 from sqlalchemy import event
 
+
 def get_engine():
     global _engine
     if _engine is None:
@@ -59,7 +60,9 @@ def get_engine():
             hostname = settings.dsql_hostname
             if settings.env == "local":
                 token = get_dsql_auth_token(
-                    hostname=hostname, region=settings.aws_region, profile=settings.aws_profile
+                    hostname=hostname,
+                    region=settings.aws_region,
+                    profile=settings.aws_profile,
                 )
             else:
                 session = boto3.Session(region_name=settings.aws_region)
@@ -84,4 +87,9 @@ def get_session_maker():
 async def get_db_session():
     session_maker = get_session_maker()
     async with session_maker() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

@@ -1,6 +1,8 @@
 """Unit tests for SQLAlchemy models."""
 
-from app.adapters.models import UserModel, RepoModel, OrgModel
+from datetime import datetime
+
+from app.adapters.models import EolStatusModel, OrgModel, RepoModel, UserModel
 
 
 class TestUserModel:
@@ -75,6 +77,30 @@ class TestOrgModel:
             github_id=100,
             name="Test Org",
             login="testorg",
+            github_access_token="gho_test",
         )
         assert model.id == "o1"
         assert model.login == "testorg"
+        assert model.github_access_token == "gho_test"
+
+
+class TestEolStatusModel:
+    def test_to_domain(self):
+        scanned_at = datetime(2026, 3, 28, 10, 0, 0)
+        model = EolStatusModel(
+            id="s1",
+            repo_id="r1",
+            framework_name="Nuxt",
+            current_version="3.16.0",
+            is_eol=False,
+            last_scanned_at=scanned_at,
+            source_path="apps/web/package.json",
+        )
+
+        status = model.to_domain()
+
+        assert status.repo_id == "r1"
+        assert status.framework_name == "Nuxt"
+        assert status.current_version == "3.16.0"
+        assert status.last_scanned_at == scanned_at
+        assert status.source_path == "apps/web/package.json"

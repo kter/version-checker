@@ -1,110 +1,140 @@
 """Unit tests for the scanner usecase."""
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime
-from app.usecases.scanner import ScanRepositoryUseCase, FrameworkEolScanner
-from app.domain.entities import Repository, EolStatus
+
+from app.domain.entities import EolStatus, Repository
+from app.usecases.scanner import FrameworkEolScanner, ScanRepositoryUseCase
 
 
 class TestFrameworkEolScanner:
-    @pytest.mark.asyncio
-    async def test_scan_repo_returns_eol_status(self):
+    def test_extract_package_json_dependencies(self):
         scanner = FrameworkEolScanner()
-        repo = Repository(
-            id="r1", github_id=1, name="test-repo", full_name="org/test-repo"
-        )
-        results = await scanner.scan_repo(repo)
+        content = """
+        {
+          "dependencies": {
+            "nuxt": "^3.16.0",
+            "react": "18.3.1"
+          },
+          "engines": {
+            "node": ">=20.11.0"
+          }
+        }
+        """
 
-        assert len(results) == 1
-        assert results[0].repo_id == "r1"
-        assert results[0].framework_name == "nuxt"
-        assert results[0].current_version == "2.15.8"
-        assert results[0].is_eol is True
-        assert results[0].eol_date == datetime(2023, 12, 31)
+        results = scanner._extract_dependencies("package.json", content)
 
-    @pytest.mark.asyncio
-    async def test_scan_repo_returns_eol_status_entity(self):
+        assert ("Nuxt", "3.16.0", "package.json") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("React", "18.3.1", "package.json") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Node.js", "20.11.0", "package.json") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_pyproject_dependencies(self):
         scanner = FrameworkEolScanner()
-        repo = Repository(
-            id="r2", github_id=2, name="other-repo", full_name="org/other-repo"
-        )
-        results = await scanner.scan_repo(repo)
+        content = """
+        [project]
+        dependencies = ["Django>=5.1,<5.2"]
+        requires-python = ">=3.12"
+        """
 
-        assert len(results) == 1
-        assert isinstance(results[0], EolStatus)
-        assert isinstance(results[0].last_scanned_at, datetime)
+        results = scanner._extract_dependencies("pyproject.toml", content)
+
+        assert ("Django", "5.1", "pyproject.toml") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Python", "3.12", "pyproject.toml") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_match_release_prefers_specific_cycle(self):
+        scanner = FrameworkEolScanner()
+        releases = [
+            {"name": "3", "releaseDate": "2022-01-01", "isEol": False},
+            {"name": "3.5", "releaseDate": "2024-09-03", "isEol": False},
+            {"name": "3.4", "releaseDate": "2023-12-29", "isEol": True},
+        ]
+
+        release = scanner._match_release(releases, "3.5.31")
+
+        assert release["name"] == "3.5"
 
 
 class TestScanRepositoryUseCase:
     @pytest.mark.asyncio
-    async def test_execute_with_no_repos(self):
-        repo_repo = AsyncMock()
-        repo_repo.find_by_org.return_value = []
-        cache_repo = AsyncMock()
-
-        usecase = ScanRepositoryUseCase(repo_repo, cache_repo)
-        results = await usecase.execute("org-empty")
-
-        assert results == []
-        repo_repo.find_by_org.assert_called_once_with("org-empty")
-        cache_repo.get_eol_status.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_execute_returns_cached_results(self):
-        repo = Repository(id="r1", github_id=1, name="repo", full_name="org/repo")
-        cached_status = EolStatus(
-            repo_id="r1",
-            framework_name="nuxt",
-            current_version="3.0.0",
-            is_eol=False,
-        )
-
-        repo_repo = AsyncMock()
-        repo_repo.find_by_org.return_value = [repo]
-        cache_repo = AsyncMock()
-        cache_repo.get_eol_status.return_value = [cached_status]
-
-        usecase = ScanRepositoryUseCase(repo_repo, cache_repo)
-        results = await usecase.execute("org-1")
-
-        assert len(results) == 1
-        assert results[0].framework_name == "nuxt"
-        assert results[0].is_eol is False
-        cache_repo.set_eol_status.assert_not_called()  # No cache write on hit
-
-    @pytest.mark.asyncio
-    async def test_execute_scans_on_cache_miss(self):
-        repo = Repository(id="r1", github_id=1, name="repo", full_name="org/repo")
-
-        repo_repo = AsyncMock()
-        repo_repo.find_by_org.return_value = [repo]
-        cache_repo = AsyncMock()
-        cache_repo.get_eol_status.return_value = []  # Cache miss
-
-        usecase = ScanRepositoryUseCase(repo_repo, cache_repo)
-        results = await usecase.execute("org-1")
-
-        assert len(results) == 1
-        assert results[0].is_eol is True  # Scanner mock returns EOL
-        cache_repo.set_eol_status.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_execute_with_multiple_repos(self):
-        repos = [
-            Repository(
-                id=f"r{i}", github_id=i, name=f"repo-{i}", full_name=f"org/repo-{i}"
-            )
-            for i in range(3)
+    async def test_get_saved_results(self):
+        repo_repository = AsyncMock()
+        status_repository = AsyncMock()
+        status_repository.find_by_org.return_value = [
+            EolStatus(repo_id="repo-1", framework_name="Nuxt", current_version="3.0.0")
         ]
 
-        repo_repo = AsyncMock()
-        repo_repo.find_by_org.return_value = repos
-        cache_repo = AsyncMock()
-        cache_repo.get_eol_status.return_value = []  # All cache misses
+        usecase = ScanRepositoryUseCase(repo_repository, status_repository)
+        results = await usecase.get_saved_results("test-org")
 
-        usecase = ScanRepositoryUseCase(repo_repo, cache_repo)
-        results = await usecase.execute("org-1")
+        assert len(results) == 1
+        assert results[0].framework_name == "Nuxt"
+        status_repository.find_by_org.assert_called_once_with("test-org")
 
-        assert len(results) == 3
-        assert cache_repo.set_eol_status.call_count == 3
+    @pytest.mark.asyncio
+    async def test_execute_scans_and_persists_statuses(self):
+        discovered_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+        saved_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+        status = EolStatus(
+            repo_id="repo-db-1",
+            framework_name="Nuxt",
+            current_version="3.16.0",
+            is_eol=False,
+            last_scanned_at=datetime.now(UTC).replace(tzinfo=None),
+            source_path="apps/web/package.json",
+        )
+
+        repo_repository = AsyncMock()
+        repo_repository.save.return_value = saved_repo
+        status_repository = AsyncMock()
+        scanner = AsyncMock()
+        scanner.scan_repo.return_value = [status]
+
+        usecase = ScanRepositoryUseCase(
+            repo_repository, status_repository, scanner=scanner
+        )
+
+        with patch(
+            "app.usecases.scanner.GitHubClient.list_org_repositories",
+            new=AsyncMock(return_value=[discovered_repo]),
+        ):
+            results = await usecase.execute("test-org", "gho_test")
+
+        assert results == [status]
+        repo_repository.save.assert_awaited_once()
+        scanner.scan_repo.assert_awaited_once_with(saved_repo, "gho_test")
+        status_repository.replace_for_repo.assert_awaited_once_with(
+            "repo-db-1", [status]
+        )

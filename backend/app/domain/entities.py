@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, List
 
 
@@ -9,6 +9,7 @@ class Organization:
     github_id: int
     name: str
     login: str
+    github_access_token: Optional[str] = None
 
 
 @dataclass
@@ -19,6 +20,7 @@ class User:
     email: Optional[str] = None
     role: str = "member"  # Simple RBAC
     organizations: List[Organization] = field(default_factory=list)
+    github_access_token: Optional[str] = None
 
 
 @dataclass
@@ -39,4 +41,7 @@ class EolStatus:
     current_version: str
     eol_date: Optional[datetime] = None
     is_eol: bool = False
-    last_scanned_at: datetime = field(default_factory=datetime.utcnow)
+    last_scanned_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    source_path: Optional[str] = None

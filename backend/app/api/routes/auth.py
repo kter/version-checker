@@ -9,8 +9,8 @@ from app.api.auth_deps import SECRET_KEY, ALGORITHM
 
 from app.infrastructure.config import settings
 from app.infrastructure.database import get_db_session
-from app.adapters.database_repo import UserRepository
-from app.domain.entities import User
+from app.adapters.database_repo import OrgRepository, UserRepository
+from app.domain.entities import Organization, User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
@@ -91,12 +91,25 @@ async def callback(
             },
         )
         orgs = orgs_res.json()
+        org_repo = OrgRepository(session)
+        saved_orgs = await org_repo.save_all(
+            [
+                Organization(
+                    id=org["login"],
+                    github_id=org["id"],
+                    name=org.get("login") or org.get("name") or org["login"],
+                    login=org["login"],
+                    github_access_token=access_token,
+                )
+                for org in orgs
+            ]
+        )
 
         # Create JWT Token
         payload = {
             "sub": saved_user.id,
             "gh_id": saved_user.github_id,
-            "ght": access_token  # Storing GitHub token in JWT to use it for later org validation
+            "ght": access_token,  # Storing GitHub token in JWT to use it for later org validation
         }
         app_token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -107,5 +120,7 @@ async def callback(
                 "username": saved_user.username,
                 "github_id": saved_user.github_id,
             },
-            "organizations": [{"id": org["id"], "login": org["login"]} for org in orgs],
+            "organizations": [
+                {"id": org.github_id, "login": org.login} for org in saved_orgs
+            ],
         }

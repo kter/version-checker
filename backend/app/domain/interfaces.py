@@ -13,6 +13,20 @@ class IUserRepository(ABC):
         pass
 
 
+class IOrgRepository(ABC):
+    @abstractmethod
+    async def save(self, org: Organization) -> Organization:
+        pass
+
+    @abstractmethod
+    async def save_all(self, orgs: List[Organization]) -> List[Organization]:
+        pass
+
+    @abstractmethod
+    async def find_all_with_tokens(self) -> List[Organization]:
+        pass
+
+
 class IRepoRepository(ABC):
     @abstractmethod
     async def find_by_org(self, org_id: str) -> List[Repository]:
@@ -23,13 +37,17 @@ class IRepoRepository(ABC):
         pass
 
 
-class IEolCacheRepository(ABC):
-    """DynamoDB specialized caching repo interface."""
+class IEolStatusRepository(ABC):
+    """Persistent scan result repository."""
 
     @abstractmethod
-    async def get_eol_status(self, repo_id: str) -> List[EolStatus]:
+    async def find_by_repo(self, repo_id: str) -> List[EolStatus]:
         pass
 
     @abstractmethod
-    async def set_eol_status(self, status: EolStatus, ttl_seconds: int = 86400) -> None:
+    async def find_by_org(self, org_id: str) -> List[EolStatus]:
+        pass
+
+    @abstractmethod
+    async def replace_for_repo(self, repo_id: str, statuses: List[EolStatus]) -> None:
         pass
