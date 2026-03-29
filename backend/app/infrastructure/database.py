@@ -3,6 +3,16 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from app.infrastructure.config import settings
 
 
+def get_dsql_hostname() -> str:
+    hostname = settings.dsql_hostname
+    if not hostname:
+        raise RuntimeError(
+            "DSQL_ENDPOINT is not configured. Ensure the repository root .env "
+            "is present or export DSQL_ENDPOINT before running backend migrations."
+        )
+    return hostname
+
+
 def get_dsql_auth_token(
     hostname: str, region: str = "ap-northeast-1", profile: str = "dev"
 ) -> str:
@@ -21,7 +31,7 @@ DB_NAME = "postgres"
 
 
 def get_database_url() -> str:
-    hostname = settings.dsql_hostname
+    hostname = get_dsql_hostname()
     if settings.env == "local":
         token = get_dsql_auth_token(
             hostname=hostname, region=settings.aws_region, profile=settings.aws_profile
@@ -57,7 +67,7 @@ def get_engine():
 
         @event.listens_for(_engine.sync_engine, "do_connect")
         def provide_token(dialect, conn_rec, cargs, cparams):
-            hostname = settings.dsql_hostname
+            hostname = get_dsql_hostname()
             if settings.env == "local":
                 token = get_dsql_auth_token(
                     hostname=hostname,

@@ -6,6 +6,14 @@ from unittest.mock import patch
 
 
 class TestSettings:
+    def test_default_env_files_include_repo_root_env(self):
+        from app.infrastructure.config import BACKEND_DIR, DEFAULT_ENV_FILES, REPO_ROOT
+
+        assert DEFAULT_ENV_FILES == (
+            str(REPO_ROOT / ".env"),
+            str(BACKEND_DIR / ".env"),
+        )
+
     def test_dsql_hostname_from_arn(self):
         with patch.dict(
             os.environ,

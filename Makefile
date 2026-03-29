@@ -1,4 +1,4 @@
-.PHONY: setup build up down logs switch-env setup-local setup-dev setup-prd deploy-dev deploy-prd build-lambda deploy-lambda deploy-frontend
+.PHONY: setup build up down logs switch-env setup-local setup-dev setup-prd deploy-dev deploy-prd build-lambda deploy-lambda deploy-frontend migrate-backend
 
 setup: build up
 
@@ -71,31 +71,47 @@ deploy-lambda:
 		exit 1; \
 	fi
 	$(MAKE) build-lambda
-	cd terraform && terraform workspace select $(ENV) || terraform workspace new $(ENV)
-	cd terraform && terraform apply -var="env=$(ENV)" \
-		-target=aws_lambda_function.backend \
-		-target=aws_lambda_function.scan_worker \
-		-target=aws_lambda_event_source_mapping.scan_jobs \
-		-auto-approve
+	@set -a; \
+	if [ -f ".env.$(ENV)" ]; then . "./.env.$(ENV)"; fi; \
+	export TF_VAR_github_client_id="$$GITHUB_CLIENT_ID"; \
+	export TF_VAR_github_client_secret="$$GITHUB_CLIENT_SECRET"; \
+	cd terraform && { \
+		terraform workspace select $(ENV) || terraform workspace new $(ENV); \
+		terraform apply -var="env=$(ENV)" \
+			-target=aws_lambda_function.backend \
+			-target=aws_lambda_function.scan_worker \
+			-target=aws_lambda_event_source_mapping.scan_jobs \
+			-auto-approve; \
+	}
 	@echo "Lambda deployed."
 
 # Deploy to AWS dev environment (full infrastructure)
 deploy-dev:
 	$(MAKE) build-lambda
+	@set -a; \
+	if [ -f ".env.dev" ]; then . ./.env.dev; fi; \
+	export TF_VAR_github_client_id="$$GITHUB_CLIENT_ID"; \
+	export TF_VAR_github_client_secret="$$GITHUB_CLIENT_SECRET"; \
 	cd terraform && terraform init && \
 	terraform workspace select dev || terraform workspace new dev && \
 	terraform apply -var="env=dev" -auto-approve
 	@echo "Deploy dev complete. Generating .env.dev..."
 	make setup-dev
+	make migrate-backend
 
 # Deploy to AWS prd environment (full infrastructure)
 deploy-prd:
 	$(MAKE) build-lambda
+	@set -a; \
+	if [ -f ".env.prd" ]; then . ./.env.prd; fi; \
+	export TF_VAR_github_client_id="$$GITHUB_CLIENT_ID"; \
+	export TF_VAR_github_client_secret="$$GITHUB_CLIENT_SECRET"; \
 	cd terraform && terraform init && \
 	terraform workspace select prd || terraform workspace new prd && \
 	terraform apply -var="env=prd" -auto-approve
 	@echo "Deploy prd complete. Generating .env.prd..."
 	make setup-prd
+	make migrate-backend
 
 # Deploy frontend to S3 + CloudFront
 deploy-frontend:
@@ -207,3 +223,7 @@ claude-pre-tool-use:
 install-hooks:
 	mise exec -- lefthook install
 	@echo "Git hooks installed via lefthook."
+
+.PHONY: migrate-backend
+migrate-backend:
+	cd backend && poetry run python scripts/migrate_repo_selection.py

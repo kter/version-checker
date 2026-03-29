@@ -1,5 +1,13 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_DIR.parent
+DEFAULT_ENV_FILES = (
+    str(REPO_ROOT / ".env"),
+    str(BACKEND_DIR / ".env"),
+)
 
 
 class Settings(BaseSettings):
@@ -41,9 +49,10 @@ class Settings(BaseSettings):
             if origin.strip()
         ]
 
-    class Config:
-        env_file = ".env"
-        extra = "allow"
+    model_config = SettingsConfigDict(
+        env_file=DEFAULT_ENV_FILES,
+        extra="allow",
+    )
 
 
 settings = Settings()
