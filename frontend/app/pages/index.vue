@@ -15,19 +15,18 @@
       <div class="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
         <label class="text-sm font-semibold text-gray-700 dark:text-gray-300 whitespace-nowrap">{{ $t('organization') }}:</label>
         <USelect
-          :model-value="selectedOrg"
+          v-model="selectedOrg"
           :items="userOrgs"
-          option-attribute="login"
-          value-attribute="login"
+          label-key="login"
+          value-key="login"
           :placeholder="$t('select_org')"
           class="w-full sm:w-64"
           size="lg"
-          @update:model-value="val => { selectedOrg = val; onOrgChange() }"
         />
       </div>
       <div class="flex items-center justify-between w-full sm:w-auto gap-4">
         <p class="text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-100/50 dark:bg-gray-800/50 px-3 py-1.5 rounded-lg">
-          {{ $t('repositories_found', { count: repositories ? repositories.length : 0 }) }}
+          {{ $t('repositories_found', { count: repositoryCount }) }}
         </p>
         <UButton
           icon="i-heroicons-arrow-path"
@@ -36,10 +35,27 @@
           size="lg"
           class="shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
           :loading="isScanning"
-          :disabled="!selectedOrg"
+          :disabled="!selectedOrg || isScanJobActive"
           @click="scanOrganization"
           :label="$t('scan')"
         />
+      </div>
+    </div>
+
+    <div
+      v-if="activeJob && isScanJobActive"
+      class="bg-amber-50/80 dark:bg-amber-950/70 backdrop-blur-sm border border-amber-200 dark:border-amber-800/50 rounded-2xl p-5 text-amber-900 dark:text-amber-100 shadow-sm"
+    >
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p class="text-sm font-semibold">{{ scanJobStatusLabel }}</p>
+          <p class="text-sm text-amber-800/80 dark:text-amber-200/80">
+            {{ $t('scan_progress', { completed: activeJob.completed_repos, total: activeJob.total_repos }) }}
+          </p>
+        </div>
+        <p class="text-xs uppercase tracking-[0.18em] text-amber-700/70 dark:text-amber-300/70">
+          {{ activeJob.status }}
+        </p>
       </div>
     </div>
 
@@ -108,7 +124,7 @@
         size="xl"
         class="shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300"
         :loading="isScanning"
-        :disabled="!selectedOrg"
+        :disabled="!selectedOrg || isScanJobActive"
         @click="scanOrganization"
         :label="$t('scan')"
       />
@@ -129,16 +145,39 @@ const isScanning = ref(false)
 const isLoading = ref(false)
 const error = ref('')
 const repositories = ref([])
+const repositoryCount = ref(0)
+const activeJob = ref(null)
+const pollingHandle = ref(null)
 
 const userOrgs = computed(() => organizations.value)
 const selectedOrg = ref('')
 
 const { t } = useI18n()
 
+const ACTIVE_SCAN_JOB_STATUSES = new Set(['queued', 'running'])
+const TERMINAL_SCAN_JOB_STATUSES = new Set(['completed', 'partial_failed', 'failed'])
+
+const isScanJobActive = computed(() => {
+  return Boolean(activeJob.value && ACTIVE_SCAN_JOB_STATUSES.has(activeJob.value.status))
+})
+
+const scanJobStatusLabel = computed(() => {
+  if (!activeJob.value) {
+    return ''
+  }
+  if (activeJob.value.status === 'queued') {
+    return t('scan_queued')
+  }
+  return t('scan_running')
+})
+
 function initializeSelectedOrg() {
   if (userOrgs.value.length === 0) {
     selectedOrg.value = ''
     repositories.value = []
+    repositoryCount.value = 0
+    stopPolling()
+    activeJob.value = null
     return
   }
 
@@ -164,23 +203,88 @@ watch(
   { deep: true, immediate: true }
 )
 
-function onOrgChange() {
-  if (selectedOrg.value) {
+watch(selectedOrg, (newValue, oldValue) => {
+  if (newValue && newValue !== oldValue) {
+    stopPolling()
     loadData()
+  }
+})
+
+onUnmounted(() => {
+  stopPolling()
+})
+
+function stopPolling() {
+  if (pollingHandle.value) {
+    clearInterval(pollingHandle.value)
+    pollingHandle.value = null
   }
 }
 
-async function loadData() {
+function syncJobState(job) {
+  activeJob.value = job || null
+  isScanning.value = Boolean(job && ACTIVE_SCAN_JOB_STATUSES.has(job.status))
+  if (job && ACTIVE_SCAN_JOB_STATUSES.has(job.status)) {
+    startPolling(job.job_id)
+    return
+  }
+  stopPolling()
+}
+
+function startPolling(jobId) {
+  if (pollingHandle.value) return
+  pollingHandle.value = setInterval(() => {
+    pollJobStatus(jobId)
+  }, 3000)
+}
+
+async function pollJobStatus(jobId) {
   if (!selectedOrg.value) return
+  try {
+    const token = localStorage.getItem('auth_token')
+    const response = await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}/jobs/${jobId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+    syncJobState(response)
+    if (TERMINAL_SCAN_JOB_STATUSES.has(response.status)) {
+      isScanning.value = false
+      const terminalError = response.status === 'partial_failed' || response.status === 'failed'
+        ? (response.error_message || t('scan_failed_message'))
+        : ''
+      await loadData({ preserveExisting: true, clearError: !terminalError })
+      if (terminalError) {
+        error.value = terminalError
+      }
+    }
+  } catch (err) {
+    stopPolling()
+    isScanning.value = false
+    if (err.data?.detail) {
+      error.value = err.data.detail
+    } else {
+      error.value = err.message || t('scan_failed_message')
+    }
+  }
+}
+
+async function loadData(options = {}) {
+  if (!selectedOrg.value) return
+  const { preserveExisting = false, clearError = true } = options
   isLoading.value = true
-  error.value = ''
-  repositories.value = []
+  if (clearError) {
+    error.value = ''
+  }
+  if (!preserveExisting) {
+    repositories.value = []
+  }
   try {
     const token = localStorage.getItem('auth_token')
     const response = await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
     repositories.value = response.statuses || []
+    repositoryCount.value = response.repository_count ?? response.statuses?.length ?? 0
+    syncJobState(response.latest_job)
   } catch (err) {
     if (err.data?.detail) {
       error.value = err.data.detail
@@ -193,7 +297,7 @@ async function loadData() {
 }
 
 async function scanOrganization() {
-  if (!selectedOrg.value) return
+  if (!selectedOrg.value || isScanJobActive.value) return
   isScanning.value = true
   error.value = ''
   try {
@@ -202,15 +306,14 @@ async function scanOrganization() {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {}
     })
-    repositories.value = response.statuses || []
+    syncJobState(response)
   } catch (err) {
+    isScanning.value = false
     if (err.data?.detail) {
       error.value = err.data.detail
     } else {
-      error.value = err.message || 'Failed to trigger scan'
+      error.value = err.message || t('scan_failed_message')
     }
-  } finally {
-    isScanning.value = false
   }
 }
 </script>

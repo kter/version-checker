@@ -21,6 +21,7 @@ if [ "$ENV_NAME" == "local" ]; then
   echo "" >> $ENV_FILE
   echo "# Cache Configuration (using existing dev resources)" >> $ENV_FILE
   echo "DYNAMO_TABLE=version-checker-dev-eol-cache" >> $ENV_FILE
+  echo "SCAN_QUEUE_URL=" >> $ENV_FILE
   echo "" >> $ENV_FILE
   echo "# Backend API (Local)" >> $ENV_FILE
   echo "FRONTEND_BASE_URL=http://localhost:3000" >> $ENV_FILE
@@ -34,7 +35,7 @@ if [ "$ENV_NAME" == "local" ]; then
 elif [ "$ENV_NAME" == "dev" ] || [ "$ENV_NAME" == "prd" ]; then
   # dev/prd environments use Terraform outputs
   # Preserve manual variables (GitHub tokens)
-  MANAGED_KEYS="AWS_PROFILE|AWS_REGION|DSQL_ENDPOINT|DYNAMO_TABLE|LAMBDA_BACKEND_URL|API_GATEWAY_URL|FRONTEND_BASE_URL|NUXT_PUBLIC_API_BASE|CORS_ALLOW_ORIGINS"
+  MANAGED_KEYS="AWS_PROFILE|AWS_REGION|DSQL_ENDPOINT|DYNAMO_TABLE|SCAN_QUEUE_URL|LAMBDA_BACKEND_URL|API_GATEWAY_URL|FRONTEND_BASE_URL|NUXT_PUBLIC_API_BASE|CORS_ALLOW_ORIGINS"
 
   PRESERVED=""
   if [ -f "$ENV_FILE" ]; then
@@ -53,6 +54,7 @@ elif [ "$ENV_NAME" == "dev" ] || [ "$ENV_NAME" == "prd" ]; then
 
   DSQL_ENDPOINT=$(terraform output -raw dsql_endpoint || echo "")
   DYNAMO_TABLE=$(terraform output -raw dynamodb_table_name || echo "")
+  SCAN_QUEUE_URL=$(terraform output -raw scan_queue_url || echo "")
   LAMBDA_BACKEND_URL=$(terraform output -raw lambda_backend_url || echo "")
   API_GATEWAY_URL=$(terraform output -raw api_base_url || echo "")
   FRONTEND_BASE_URL=$(terraform output -raw frontend_base_url || echo "")
@@ -73,6 +75,7 @@ DSQL_ENDPOINT=$DSQL_ENDPOINT
 
 # Cache Configuration
 DYNAMO_TABLE=$DYNAMO_TABLE
+SCAN_QUEUE_URL=$SCAN_QUEUE_URL
 
 # Backend API
 LAMBDA_BACKEND_URL=$LAMBDA_BACKEND_URL

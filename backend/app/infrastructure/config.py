@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     dsql_endpoint: str = ""
     dynamo_table: str = ""
+    scan_queue_url: str = ""
 
     github_client_id: Optional[str] = None
     github_client_secret: Optional[str] = None

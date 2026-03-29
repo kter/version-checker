@@ -23,8 +23,8 @@
             <USelect
               :model-value="locale"
               :items="availableLocales"
-              option-attribute="name"
-              value-attribute="code"
+              label-key="name"
+              value-key="code"
               size="sm"
               class="w-32"
               @update:model-value="setLocale"

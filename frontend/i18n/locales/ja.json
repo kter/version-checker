@@ -25,7 +25,11 @@
     "auth_load_failed": "認証処理に失敗しました。",
     "back_to_dashboard": "ダッシュボードに戻る",
     "default_user": "ユーザー",
-    "organization": "組織 (Organization)",
-    "select_org": "組織を選択してください...",
-    "loading_repositories": "リポジトリを読み込んでいます..."
+    "organization": "アカウント / 組織",
+    "select_org": "アカウントまたは組織を選択してください...",
+    "loading_repositories": "リポジトリを読み込んでいます...",
+    "scan_queued": "スキャンジョブをキューに追加しました",
+    "scan_running": "スキャンを実行中です",
+    "scan_progress": "{total} 件中 {completed} 件を処理済み",
+    "scan_failed_message": "リポジトリのスキャンに失敗しました。"
 }

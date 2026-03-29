@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import json
+import logging
 import re
 import tomllib
 from dataclasses import dataclass
@@ -11,6 +13,11 @@ import httpx
 
 from app.domain.entities import EolStatus, Repository
 from app.domain.interfaces import IEolStatusRepository, IRepoRepository
+
+logger = logging.getLogger(__name__)
+
+SCAN_REPOSITORY_CONCURRENCY = 4
+SCAN_MANIFEST_CONCURRENCY = 8
 
 
 class UnsupportedFrameworkError(Exception):
@@ -113,6 +120,28 @@ def _utcnow_naive() -> datetime:
 class GitHubClient:
     def __init__(self, access_token: str):
         self.access_token = access_token
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def __aenter__(self) -> "GitHubClient":
+        self._client = httpx.AsyncClient(timeout=30)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    @staticmethod
+    def _build_repository(item: Dict[str, Any], owner_login: str) -> Repository:
+        return Repository(
+            id="",
+            github_id=item["id"],
+            name=item["name"],
+            full_name=item["full_name"],
+            org_id=owner_login,
+            owner_login=item["owner"]["login"],
+            default_branch=item.get("default_branch") or "main",
+        )
 
     async def _request(self, method: str, url: str, **kwargs) -> Any:
         headers = kwargs.pop("headers", {})
@@ -123,10 +152,15 @@ class GitHubClient:
                 "X-GitHub-Api-Version": "2022-11-28",
             }
         )
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(method, url, headers=headers, **kwargs)
-            response.raise_for_status()
-            return response.json()
+        if self._client is not None:
+            response = await self._client.request(
+                method, url, headers=headers, **kwargs
+            )
+        else:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.request(method, url, headers=headers, **kwargs)
+        response.raise_for_status()
+        return response.json()
 
     async def list_org_repositories(self, org_login: str) -> List[Repository]:
         repositories: List[Repository] = []
@@ -142,17 +176,36 @@ class GitHubClient:
                 break
 
             for item in payload:
-                repositories.append(
-                    Repository(
-                        id="",
-                        github_id=item["id"],
-                        name=item["name"],
-                        full_name=item["full_name"],
-                        org_id=org_login,
-                        owner_login=item["owner"]["login"],
-                        default_branch=item.get("default_branch") or "main",
-                    )
-                )
+                repositories.append(self._build_repository(item, org_login))
+
+            if len(payload) < 100:
+                break
+            page += 1
+
+        return repositories
+
+    async def list_user_repositories(self, user_login: str) -> List[Repository]:
+        repositories: List[Repository] = []
+        page = 1
+
+        while True:
+            payload = await self._request(
+                "GET",
+                "https://api.github.com/user/repos",
+                params={
+                    "affiliation": "owner",
+                    "visibility": "all",
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            if not payload:
+                break
+
+            for item in payload:
+                if item.get("owner", {}).get("login") != user_login:
+                    continue
+                repositories.append(self._build_repository(item, user_login))
 
             if len(payload) < 100:
                 break
@@ -198,13 +251,13 @@ class EndOfLifeClient:
             response = await client.get(
                 f"https://endoflife.date/api/v1/products/{product_slug}/"
             )
-            if response.status_code == 404:
-                self._cache[product_slug] = None
-                return None
-            response.raise_for_status()
-            payload = response.json().get("result")
-            self._cache[product_slug] = payload
-            return payload
+        if response.status_code == 404:
+            self._cache[product_slug] = None
+            return None
+        response.raise_for_status()
+        payload = response.json().get("result")
+        self._cache[product_slug] = payload
+        return payload
 
 
 class FrameworkEolScanner:
@@ -216,25 +269,52 @@ class FrameworkEolScanner:
         repo: Repository,
         github_access_token: str,
     ) -> List[EolStatus]:
-        github_client = GitHubClient(github_access_token)
-        manifest_paths = await github_client.list_manifest_paths(repo)
+        async with GitHubClient(github_access_token) as github_client:
+            manifest_paths = await github_client.list_manifest_paths(repo)
+            if not manifest_paths:
+                return []
 
-        discovered: Dict[tuple[str, str, Optional[str]], EolStatus] = {}
-        for path in manifest_paths:
-            content = await github_client.fetch_file(repo, path)
-            if not content:
-                continue
+            manifest_semaphore = asyncio.Semaphore(SCAN_MANIFEST_CONCURRENCY)
 
-            for dependency in self._extract_dependencies(path, content):
-                status = await self._build_eol_status(repo, dependency)
-                if status:
-                    discovered[
-                        (
-                            status.framework_name,
-                            status.current_version,
-                            status.source_path,
-                        )
-                    ] = status
+            async def fetch_manifest(
+                path: str,
+            ) -> tuple[str, Optional[str]]:
+                async with manifest_semaphore:
+                    return path, await github_client.fetch_file(repo, path)
+
+            fetched_manifests = await asyncio.gather(
+                *(fetch_manifest(path) for path in manifest_paths)
+            )
+
+            dependencies: List[tuple[SupportedDependency, str, str]] = []
+            for path, content in fetched_manifests:
+                if not content:
+                    continue
+                dependencies.extend(self._extract_dependencies(path, content))
+
+            if not dependencies:
+                return []
+
+            async def build_status(
+                dependency: tuple[SupportedDependency, str, str],
+            ) -> Optional[EolStatus]:
+                return await self._build_eol_status(repo, dependency)
+
+            statuses = await asyncio.gather(
+                *(build_status(dependency) for dependency in dependencies)
+            )
+
+            discovered: Dict[tuple[str, str, Optional[str]], EolStatus] = {}
+            for status in statuses:
+                if not status:
+                    continue
+                discovered[
+                    (
+                        status.framework_name,
+                        status.current_version,
+                        status.source_path,
+                    )
+                ] = status
 
         return list(discovered.values())
 
@@ -479,18 +559,47 @@ class ScanRepositoryUseCase:
     async def get_saved_results(self, org_id: str) -> List[EolStatus]:
         return await self.eol_status_repository.find_by_org(org_id)
 
-    async def execute(self, org_id: str, github_access_token: str) -> List[EolStatus]:
+    async def list_repositories(
+        self, org_id: str, github_access_token: str, user_login: str
+    ) -> List[Repository]:
+        saved_repositories = await self.repo_repository.find_by_org(org_id)
+        if saved_repositories:
+            return saved_repositories
+
         github_client = GitHubClient(github_access_token)
-        repositories = await github_client.list_org_repositories(org_id)
+        if org_id == user_login:
+            repositories = await github_client.list_user_repositories(user_login)
+        else:
+            repositories = await github_client.list_org_repositories(org_id)
 
-        saved_repositories = []
+        persisted_repositories: List[Repository] = []
         for repo in repositories:
-            saved_repositories.append(await self.repo_repository.save(repo))
+            persisted_repositories.append(await self.repo_repository.save(repo))
 
-        all_statuses: List[EolStatus] = []
-        for repo in saved_repositories:
-            statuses = await self.scanner.scan_repo(repo, github_access_token)
-            await self.eol_status_repository.replace_for_repo(repo.id, statuses)
-            all_statuses.extend(statuses)
+        return persisted_repositories
 
-        return all_statuses
+    async def execute(
+        self, org_id: str, github_access_token: str, user_login: str
+    ) -> List[EolStatus]:
+        saved_repositories = await self.list_repositories(
+            org_id, github_access_token, user_login
+        )
+        if not saved_repositories:
+            return []
+
+        repository_semaphore = asyncio.Semaphore(SCAN_REPOSITORY_CONCURRENCY)
+
+        async def scan_repository(repo: Repository) -> List[EolStatus]:
+            async with repository_semaphore:
+                try:
+                    statuses = await self.scanner.scan_repo(repo, github_access_token)
+                    await self.eol_status_repository.replace_for_repo(repo.id, statuses)
+                    return statuses
+                except Exception:
+                    logger.exception("Failed to scan repository %s", repo.full_name)
+                    return []
+
+        results = await asyncio.gather(
+            *(scan_repository(repo) for repo in saved_repositories)
+        )
+        return [status for statuses in results for status in statuses]

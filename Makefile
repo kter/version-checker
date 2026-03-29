@@ -72,7 +72,11 @@ deploy-lambda:
 	fi
 	$(MAKE) build-lambda
 	cd terraform && terraform workspace select $(ENV) || terraform workspace new $(ENV)
-	cd terraform && terraform apply -var="env=$(ENV)" -target=aws_lambda_function.backend -auto-approve
+	cd terraform && terraform apply -var="env=$(ENV)" \
+		-target=aws_lambda_function.backend \
+		-target=aws_lambda_function.scan_worker \
+		-target=aws_lambda_event_source_mapping.scan_jobs \
+		-auto-approve
 	@echo "Lambda deployed."
 
 # Deploy to AWS dev environment (full infrastructure)

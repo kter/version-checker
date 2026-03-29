@@ -56,12 +56,15 @@ async def verify_org_access(
     org_id: str, user: User = Depends(get_current_user)
 ) -> User:
     """
-    Verify if the authenticated user has access to the specified organization.
-    Uses the user's GitHub access token to query /user/orgs and check if org_id is present.
+    Verify if the authenticated user has access to the specified account or organization.
+    A personal GitHub account is always allowed for the logged-in user.
     In a high-scale app, we might cache this in DynamoDB or the DB.
     """
     if not hasattr(user, "github_access_token") or not user.github_access_token:
         raise HTTPException(status_code=401, detail="GitHub access token missing")
+
+    if org_id in {user.username, str(user.github_id)}:
+        return user
 
     async with httpx.AsyncClient() as client:
         orgs_res = await client.get(

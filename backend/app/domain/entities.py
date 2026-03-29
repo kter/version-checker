@@ -2,6 +2,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Optional, List
 
+SCAN_JOB_STATUS_QUEUED = "queued"
+SCAN_JOB_STATUS_RUNNING = "running"
+SCAN_JOB_STATUS_COMPLETED = "completed"
+SCAN_JOB_STATUS_PARTIAL_FAILED = "partial_failed"
+SCAN_JOB_STATUS_FAILED = "failed"
+
+ACTIVE_SCAN_JOB_STATUSES = {
+    SCAN_JOB_STATUS_QUEUED,
+    SCAN_JOB_STATUS_RUNNING,
+}
+
 
 @dataclass
 class Organization:
@@ -45,3 +56,23 @@ class EolStatus:
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     source_path: Optional[str] = None
+
+
+@dataclass
+class ScanJob:
+    id: str
+    org_id: str
+    requested_by: str
+    status: str = SCAN_JOB_STATUS_QUEUED
+    total_repos: int = 0
+    completed_repos: int = 0
+    failed_repos: int = 0
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    updated_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )

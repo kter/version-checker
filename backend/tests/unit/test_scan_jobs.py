@@ -1,0 +1,276 @@
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.domain.entities import (
+    SCAN_JOB_STATUS_COMPLETED,
+    SCAN_JOB_STATUS_FAILED,
+    SCAN_JOB_STATUS_PARTIAL_FAILED,
+    Organization,
+    Repository,
+    ScanJob,
+)
+from app.usecases.scan_jobs import (
+    SCAN_JOB_MESSAGE_BOOTSTRAP,
+    SCAN_JOB_MESSAGE_REPOSITORY,
+    ScanJobService,
+    ScanJobWorkerService,
+)
+
+
+class TestScanJobService:
+    @pytest.mark.asyncio
+    async def test_enqueue_scan_reuses_active_job(self):
+        active_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+        )
+
+        org_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_active_by_org.return_value = active_job
+        queue = AsyncMock()
+
+        service = ScanJobService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+        )
+
+        result = await service.enqueue_scan("octocat", "octocat")
+
+        assert result == active_job
+        queue.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_scan_creates_bootstrap_job(self):
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_active_by_org.return_value = None
+
+        created_jobs = []
+
+        async def create_job(job):
+            created_jobs.append(job)
+            return job
+
+        scan_job_repository.create.side_effect = create_job
+        queue = AsyncMock()
+
+        service = ScanJobService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+        )
+
+        job = await service.enqueue_scan("octocat", "octocat")
+
+        assert job.org_id == "octocat"
+        assert job.status == "queued"
+        queue.send_message.assert_awaited_once_with(
+            {
+                "message_type": SCAN_JOB_MESSAGE_BOOTSTRAP,
+                "job_id": job.id,
+                "org_id": "octocat",
+            }
+        )
+        assert created_jobs[0].requested_by == "octocat"
+
+
+class TestScanJobWorkerService:
+    @pytest.mark.asyncio
+    async def test_bootstrap_completes_empty_job(self):
+        job = ScanJob(id="job-1", org_id="octocat", requested_by="octocat")
+
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = job
+        scan_job_repository.start.return_value = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=0,
+        )
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = []
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_BOOTSTRAP,
+                "job_id": "job-1",
+                "org_id": "octocat",
+            }
+        )
+
+        scan_job_repository.start.assert_awaited_once_with("job-1", 0)
+        scan_job_repository.mark_completed.assert_awaited_once_with("job-1")
+        queue.send_messages.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_repository_scan_finalizes_partial_failure(self):
+        initial_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=2,
+            completed_repos=1,
+            failed_repos=0,
+        )
+        updated_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=2,
+            completed_repos=1,
+            failed_repos=1,
+            error_message="Repository scan failed for octocat/broken: boom",
+        )
+
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        repo_repository.find_by_id.return_value = Repository(
+            id="repo-1",
+            github_id=1,
+            name="broken",
+            full_name="octocat/broken",
+            org_id="octocat",
+            owner_login="octocat",
+            default_branch="main",
+        )
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.record_repo_failure.return_value = updated_job
+        queue = AsyncMock()
+        scanner = AsyncMock()
+        scanner.scan_repo.side_effect = RuntimeError("boom")
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner=scanner,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                "job_id": "job-1",
+                "org_id": "octocat",
+                "repo_id": "repo-1",
+            }
+        )
+
+        scan_job_repository.finalize.assert_awaited_once()
+        finalize_args = scan_job_repository.finalize.await_args.args
+        assert finalize_args[0] == "job-1"
+        assert finalize_args[1] == SCAN_JOB_STATUS_PARTIAL_FAILED
+
+    @pytest.mark.asyncio
+    async def test_repository_scan_finalizes_failed_when_all_repos_fail(self):
+        initial_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=0,
+        )
+        updated_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=1,
+            error_message="Repository not found: repo-1",
+        )
+
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        repo_repository.find_by_id.return_value = None
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.record_repo_failure.return_value = updated_job
+        queue = AsyncMock()
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                "job_id": "job-1",
+                "org_id": "octocat",
+                "repo_id": "repo-1",
+            }
+        )
+
+        scan_job_repository.finalize.assert_awaited_once()
+        finalize_args = scan_job_repository.finalize.await_args.args
+        assert finalize_args[0] == "job-1"
+        assert finalize_args[1] == SCAN_JOB_STATUS_FAILED

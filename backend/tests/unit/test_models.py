@@ -2,7 +2,13 @@
 
 from datetime import datetime
 
-from app.adapters.models import EolStatusModel, OrgModel, RepoModel, UserModel
+from app.adapters.models import (
+    EolStatusModel,
+    OrgModel,
+    RepoModel,
+    ScanJobModel,
+    UserModel,
+)
 
 
 class TestUserModel:
@@ -104,3 +110,32 @@ class TestEolStatusModel:
         assert status.current_version == "3.16.0"
         assert status.last_scanned_at == scanned_at
         assert status.source_path == "apps/web/package.json"
+
+
+class TestScanJobModel:
+    def test_to_domain(self):
+        created_at = datetime(2026, 3, 28, 10, 0, 0)
+        updated_at = datetime(2026, 3, 28, 10, 0, 5)
+        model = ScanJobModel(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=4,
+            completed_repos=1,
+            failed_repos=0,
+            started_at=created_at,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+        job = model.to_domain()
+
+        assert job.id == "job-1"
+        assert job.org_id == "octocat"
+        assert job.requested_by == "octocat"
+        assert job.status == "running"
+        assert job.total_repos == 4
+        assert job.completed_repos == 1
+        assert job.created_at == created_at
+        assert job.updated_at == updated_at

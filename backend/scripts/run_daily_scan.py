@@ -2,10 +2,13 @@ import asyncio
 import logging
 from app.infrastructure.database import get_engine, async_sessionmaker
 from app.adapters.database_repo import (
-    EolStatusRepository,
     OrgRepository,
     RepoRepository,
+    EolStatusRepository,
+    ScanJobRepository,
 )
+from app.adapters.sqs_scan_queue import SqsScanQueue
+from app.usecases.scan_jobs import ScanJobService
 from app.usecases.scanner import ScanRepositoryUseCase
 
 logging.basicConfig(level=logging.INFO)
@@ -37,24 +40,32 @@ async def run_daily_scan():
         # 2. Initialize Repositories and UseCase
         repo_repository = RepoRepository(session)
         eol_status_repository = EolStatusRepository(session)
+        scan_job_repository = ScanJobRepository(session)
+        queue = SqsScanQueue()
         scanner_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
+        scan_job_service = ScanJobService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
 
         # 3. Execute Scan for each organization
         for org in organizations:
-            logger.info("Initiating scan for organization: %s", org.login)
+            logger.info("Queueing scan for organization: %s", org.login)
             try:
-                statuses = await scanner_usecase.execute(
-                    org.login, org.github_access_token
-                )
+                job = await scan_job_service.enqueue_scan(org.login, org.login)
                 await session.commit()
                 logger.info(
-                    "Successfully scanned %s dependency record(s) for %s.",
-                    len(statuses),
+                    "Queued scan job %s for %s.",
+                    job.id,
                     org.login,
                 )
             except Exception as e:
                 await session.rollback()
-                logger.error("Failed to scan organization %s: %s", org.login, str(e))
+                logger.error("Failed to queue organization %s: %s", org.login, str(e))
 
     logger.info("Daily scan completed successfully.")
 

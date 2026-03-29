@@ -1,7 +1,7 @@
 """Unit tests for domain entities."""
 
 from datetime import datetime
-from app.domain.entities import User, Organization, Repository, EolStatus
+from app.domain.entities import EolStatus, Organization, Repository, ScanJob, User
 
 
 class TestUser:
@@ -83,3 +83,15 @@ class TestEolStatus:
         )
         assert status.is_eol is True
         assert status.eol_date == eol_date
+
+
+class TestScanJob:
+    def test_create_scan_job_with_defaults(self):
+        job = ScanJob(id="job-1", org_id="octocat", requested_by="octocat")
+        assert job.id == "job-1"
+        assert job.status == "queued"
+        assert job.total_repos == 0
+        assert job.completed_repos == 0
+        assert job.failed_repos == 0
+        assert isinstance(job.created_at, datetime)
+        assert isinstance(job.updated_at, datetime)

@@ -8,6 +8,11 @@ output "dynamodb_table_name" {
   value       = aws_dynamodb_table.cache.name
 }
 
+output "scan_queue_url" {
+  description = "URL of the async scan job queue"
+  value       = aws_sqs_queue.scan_jobs.url
+}
+
 output "env" {
   value = var.env
 }

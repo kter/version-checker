@@ -25,7 +25,11 @@
     "auth_load_failed": "Failed to authenticate.",
     "back_to_dashboard": "Back to Dashboard",
     "default_user": "User",
-    "organization": "Organization",
-    "select_org": "Select an organization...",
-    "loading_repositories": "Loading repositories..."
+    "organization": "Account / Organization",
+    "select_org": "Select an account or organization...",
+    "loading_repositories": "Loading repositories...",
+    "scan_queued": "Scan job queued",
+    "scan_running": "Scan in progress",
+    "scan_progress": "{completed}/{total} repositories processed",
+    "scan_failed_message": "Failed to run repository scan."
 }

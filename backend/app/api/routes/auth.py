@@ -103,18 +103,25 @@ async def callback(
         )
         orgs = orgs_res.json()
         org_repo = OrgRepository(session)
-        saved_orgs = await org_repo.save_all(
-            [
-                Organization(
-                    id=org["login"],
-                    github_id=org["id"],
-                    name=org.get("login") or org.get("name") or org["login"],
-                    login=org["login"],
-                    github_access_token=access_token,
-                )
-                for org in orgs
-            ]
-        )
+        accessible_accounts = {
+            saved_user.username: Organization(
+                id=saved_user.username,
+                github_id=saved_user.github_id,
+                name=saved_user.username,
+                login=saved_user.username,
+                github_access_token=access_token,
+            )
+        }
+        for org in orgs:
+            accessible_accounts[org["login"]] = Organization(
+                id=org["login"],
+                github_id=org["id"],
+                name=org.get("login") or org.get("name") or org["login"],
+                login=org["login"],
+                github_access_token=access_token,
+            )
+
+        saved_orgs = await org_repo.save_all(list(accessible_accounts.values()))
 
         # Create JWT Token
         payload = {

@@ -1,7 +1,7 @@
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, String, Integer, DateTime, Boolean
 from datetime import datetime
-from app.domain.entities import User, Repository, Organization, EolStatus
+from app.domain.entities import User, Repository, Organization, EolStatus, ScanJob
 
 Base = declarative_base()
 
@@ -88,4 +88,37 @@ class EolStatusModel(Base):
             is_eol=self.is_eol,
             last_scanned_at=self.last_scanned_at,
             source_path=self.source_path,
+        )
+
+
+class ScanJobModel(Base):
+    __tablename__ = "scan_jobs"
+
+    id = Column(String, primary_key=True)
+    org_id = Column(String, nullable=False, index=True)
+    requested_by = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    total_repos = Column(Integer, default=0, nullable=False)
+    completed_repos = Column(Integer, default=0, nullable=False)
+    failed_repos = Column(Integer, default=0, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def to_domain(self) -> ScanJob:
+        return ScanJob(
+            id=self.id,
+            org_id=self.org_id,
+            requested_by=self.requested_by,
+            status=self.status,
+            total_repos=self.total_repos,
+            completed_repos=self.completed_repos,
+            failed_repos=self.failed_repos,
+            started_at=self.started_at,
+            finished_at=self.finished_at,
+            error_message=self.error_message,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
         )

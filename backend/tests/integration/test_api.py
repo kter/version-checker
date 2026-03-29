@@ -6,7 +6,7 @@ These tests use mocked dependencies to avoid needing real AWS/DB connections.
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import AsyncClient, ASGITransport
-from app.domain.entities import Repository, EolStatus, User
+from app.domain.entities import Repository, EolStatus, ScanJob, User
 from datetime import datetime
 
 
@@ -98,27 +98,110 @@ class TestAuthEndpoints:
 
             assert response.status_code == 500
 
+    @pytest.mark.asyncio
+    async def test_callback_includes_personal_account_in_organizations(
+        self, app_with_mocks
+    ):
+        with patch("app.api.routes.auth.settings") as mock_settings, patch(
+            "app.api.routes.auth.UserRepository"
+        ) as mock_user_repo_cls, patch(
+            "app.api.routes.auth.OrgRepository"
+        ) as mock_org_repo_cls, patch(
+            "app.api.routes.auth.httpx.AsyncClient"
+        ) as mock_async_client_cls:
+            mock_settings.github_client_id = "test-client-id"
+            mock_settings.github_client_secret = "test-secret"
+            mock_settings.github_redirect_uri = (
+                "https://version-check.dev.devtools.site/auth/callback"
+            )
+
+            mock_http_client = AsyncMock()
+            mock_http_client.post.return_value = MagicMock(
+                json=MagicMock(return_value={"access_token": "gho_test"}),
+                status_code=200,
+            )
+            mock_http_client.get.side_effect = [
+                MagicMock(
+                    json=MagicMock(
+                        return_value={
+                            "id": 123,
+                            "login": "octocat",
+                            "email": "octocat@example.com",
+                        }
+                    )
+                ),
+                MagicMock(
+                    json=MagicMock(
+                        return_value=[{"id": 456, "login": "acme", "name": "Acme"}]
+                    )
+                ),
+            ]
+            mock_async_client_cls.return_value.__aenter__.return_value = (
+                mock_http_client
+            )
+
+            saved_user = User(
+                id="u1", github_id=123, username="octocat", email="octocat@example.com"
+            )
+            mock_user_repo = MagicMock()
+            mock_user_repo.save = AsyncMock(return_value=saved_user)
+            mock_user_repo_cls.return_value = mock_user_repo
+
+            mock_org_repo = MagicMock()
+            mock_org_repo.save_all = AsyncMock()
+            mock_org_repo_cls.return_value = mock_org_repo
+            mock_org_repo.save_all.return_value = [
+                type(
+                    "SavedOrg",
+                    (),
+                    {"github_id": 123, "login": "octocat"},
+                )(),
+                type(
+                    "SavedOrg",
+                    (),
+                    {"github_id": 456, "login": "acme"},
+                )(),
+            ]
+
+            transport = ASGITransport(app=app_with_mocks)
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.get("/api/v1/auth/callback?code=test-code")
+
+        assert response.status_code == 200
+        assert response.json()["organizations"] == [
+            {"id": 123, "login": "octocat"},
+            {"id": 456, "login": "acme"},
+        ]
+        saved_accounts = mock_org_repo.save_all.await_args.args[0]
+        assert [account.login for account in saved_accounts] == ["octocat", "acme"]
+
 
 class TestScanEndpoints:
     @pytest.mark.asyncio
     async def test_get_scan_results_empty(self, app_with_mocks, mock_db_session):
         from app.api.auth_deps import verify_org_access
-        from app.api.routes.scan import get_scan_usecase
+        from app.api.routes.scan import get_scan_job_service
 
-        fake_usecase = MagicMock()
-        fake_usecase.get_saved_results = AsyncMock(return_value=[])
-        fake_usecase.repo_repository = MagicMock()
-        fake_usecase.repo_repository.find_by_org = AsyncMock(return_value=[])
+        fake_service = MagicMock()
+        fake_service.get_scan_results = AsyncMock(
+            return_value={
+                "repository_count": 1,
+                "statuses": [],
+                "latest_job": None,
+            }
+        )
 
-        async def override_usecase():
-            return fake_usecase
+        async def override_service():
+            return fake_service
 
         async def override_auth(org_id: str):
             return User(
                 id="u1", github_id=1, username="alice", github_access_token="token"
             )
 
-        app_with_mocks.dependency_overrides[get_scan_usecase] = override_usecase
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
         app_with_mocks.dependency_overrides[verify_org_access] = override_auth
 
         transport = ASGITransport(app=app_with_mocks)
@@ -126,64 +209,109 @@ class TestScanEndpoints:
             response = await client.get("/api/v1/scan/orgs/test-org")
 
         assert response.status_code == 200
-        assert response.json() == {"statuses": []}
+        assert response.json() == {
+            "repository_count": 1,
+            "statuses": [],
+            "latest_job": None,
+        }
 
     @pytest.mark.asyncio
-    async def test_post_scan_triggers_scan(self, app_with_mocks, mock_db_session):
+    async def test_post_scan_enqueues_job(self, app_with_mocks, mock_db_session):
         from app.api.auth_deps import verify_org_access
-        from app.api.routes.scan import get_scan_usecase
+        from app.api.routes.scan import get_scan_job_service
 
-        status = EolStatus(
-            repo_id="repo-1",
-            framework_name="Nuxt",
-            current_version="3.16.0",
-            is_eol=False,
-            last_scanned_at=datetime(2026, 3, 28, 12, 0, 0),
-            source_path="apps/web/package.json",
-        )
-        fake_usecase = MagicMock()
-        fake_usecase.execute = AsyncMock(return_value=[status])
-        fake_usecase.repo_repository = MagicMock()
-        fake_usecase.repo_repository.find_by_org = AsyncMock(
-            return_value=[
-                Repository(
-                    id="repo-1",
-                    github_id=1,
-                    name="web",
-                    full_name="test-org/web",
-                    org_id="test-org",
-                    owner_login="test-org",
-                    default_branch="main",
-                )
-            ]
+        fake_service = MagicMock()
+        fake_service.enqueue_scan = AsyncMock(
+            return_value=ScanJob(
+                id="job-1",
+                org_id="test-org",
+                requested_by="alice",
+                status="queued",
+                total_repos=0,
+                completed_repos=0,
+                failed_repos=0,
+                created_at=datetime(2026, 3, 28, 12, 0, 0),
+                updated_at=datetime(2026, 3, 28, 12, 0, 0),
+            )
         )
 
-        async def override_usecase():
-            return fake_usecase
+        async def override_service():
+            return fake_service
 
         async def override_auth(org_id: str):
             return User(
                 id="u1", github_id=1, username="alice", github_access_token="token"
             )
 
-        app_with_mocks.dependency_overrides[get_scan_usecase] = override_usecase
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
         app_with_mocks.dependency_overrides[verify_org_access] = override_auth
 
         transport = ASGITransport(app=app_with_mocks)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post("/api/v1/scan/orgs/test-org")
 
+        assert response.status_code == 202
+        assert response.json() == {
+            "job_id": "job-1",
+            "org_id": "test-org",
+            "status": "queued",
+            "total_repos": 0,
+            "completed_repos": 0,
+            "failed_repos": 0,
+            "started_at": None,
+            "finished_at": None,
+            "error_message": None,
+            "created_at": "2026-03-28T12:00:00",
+            "updated_at": "2026-03-28T12:00:00",
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_scan_job_status(self, app_with_mocks, mock_db_session):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+
+        fake_service = MagicMock()
+        fake_service.get_job = AsyncMock(
+            return_value=ScanJob(
+                id="job-1",
+                org_id="test-org",
+                requested_by="alice",
+                status="running",
+                total_repos=4,
+                completed_repos=1,
+                failed_repos=0,
+                started_at=datetime(2026, 3, 28, 12, 0, 0),
+                created_at=datetime(2026, 3, 28, 11, 59, 55),
+                updated_at=datetime(2026, 3, 28, 12, 0, 5),
+            )
+        )
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/scan/orgs/test-org/jobs/job-1")
+
         assert response.status_code == 200
         assert response.json() == {
-            "statuses": [
-                {
-                    "repo_id": "test-org/web",
-                    "framework": "Nuxt",
-                    "version": "3.16.0",
-                    "is_eol": False,
-                    "eol_date": None,
-                    "last_scanned_at": "2026-03-28T12:00:00",
-                    "source_path": "apps/web/package.json",
-                }
-            ]
+            "job_id": "job-1",
+            "org_id": "test-org",
+            "status": "running",
+            "total_repos": 4,
+            "completed_repos": 1,
+            "failed_repos": 0,
+            "started_at": "2026-03-28T12:00:00",
+            "finished_at": None,
+            "error_message": None,
+            "created_at": "2026-03-28T11:59:55",
+            "updated_at": "2026-03-28T12:00:05",
         }
