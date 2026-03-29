@@ -1,6 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Optional, List
-from app.domain.entities import User, Repository, EolStatus, Organization, ScanJob
+from app.domain.entities import (
+    User,
+    Repository,
+    EolStatus,
+    Organization,
+    ScanJob,
+    TokenUsageEvent,
+)
 
 
 class IUserRepository(ABC):
@@ -37,11 +44,21 @@ class IRepoRepository(ABC):
         pass
 
     @abstractmethod
+    async def find_selected_by_org(self, org_id: str) -> List[Repository]:
+        pass
+
+    @abstractmethod
     async def save(self, repo: Repository) -> Repository:
         pass
 
     @abstractmethod
     async def find_by_id(self, repo_id: str) -> Optional[Repository]:
+        pass
+
+    @abstractmethod
+    async def replace_selection(
+        self, org_id: str, selected_repo_ids: List[str]
+    ) -> None:
         pass
 
 
@@ -100,4 +117,14 @@ class IScanJobRepository(ABC):
     async def finalize(
         self, job_id: str, status: str, error_message: Optional[str] = None
     ) -> Optional[ScanJob]:
+        pass
+
+
+class ITokenUsageRepository(ABC):
+    @abstractmethod
+    async def save(self, event: TokenUsageEvent) -> TokenUsageEvent:
+        pass
+
+    @abstractmethod
+    async def get_current_month_total_tokens(self, user_id: str, now=None) -> int:
         pass

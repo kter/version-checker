@@ -43,6 +43,7 @@ class Repository:
     org_id: Optional[str] = None
     owner_login: str = ""
     default_branch: str = "main"
+    is_selected: bool = True
 
 
 @dataclass
@@ -74,5 +75,18 @@ class ScanJob:
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     updated_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+
+@dataclass
+class TokenUsageEvent:
+    user_id: str
+    provider: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    recorded_at: datetime = field(
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
     )

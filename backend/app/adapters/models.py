@@ -1,7 +1,14 @@
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, String, Integer, DateTime, Boolean
 from datetime import datetime
-from app.domain.entities import User, Repository, Organization, EolStatus, ScanJob
+from app.domain.entities import (
+    User,
+    Repository,
+    Organization,
+    EolStatus,
+    ScanJob,
+    TokenUsageEvent,
+)
 
 Base = declarative_base()
 
@@ -54,6 +61,7 @@ class RepoModel(Base):
     org_id = Column(String, nullable=True)  # No FK constraint for DSQL
     owner_login = Column(String, nullable=False)
     default_branch = Column(String, default="main")
+    is_selected = Column(Boolean, default=True, nullable=False)
 
     def to_domain(self) -> Repository:
         return Repository(
@@ -64,6 +72,7 @@ class RepoModel(Base):
             org_id=self.org_id,
             owner_login=self.owner_login,
             default_branch=self.default_branch,
+            is_selected=True if self.is_selected is None else self.is_selected,
         )
 
 
@@ -121,4 +130,28 @@ class ScanJobModel(Base):
             error_message=self.error_message,
             created_at=self.created_at,
             updated_at=self.updated_at,
+        )
+
+
+class TokenUsageEventModel(Base):
+    __tablename__ = "token_usage_events"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    input_tokens = Column(Integer, nullable=False)
+    output_tokens = Column(Integer, nullable=False)
+    total_tokens = Column(Integer, nullable=False)
+    recorded_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_domain(self) -> TokenUsageEvent:
+        return TokenUsageEvent(
+            user_id=self.user_id,
+            provider=self.provider,
+            model=self.model,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            total_tokens=self.total_tokens,
+            recorded_at=self.recorded_at,
         )

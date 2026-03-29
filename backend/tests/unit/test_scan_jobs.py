@@ -1,10 +1,8 @@
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.domain.entities import (
-    SCAN_JOB_STATUS_COMPLETED,
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
     Organization,
@@ -63,6 +61,19 @@ class TestScanJobService:
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
         scan_job_repository.find_active_by_org.return_value = None
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            )
+        ]
 
         created_jobs = []
 
@@ -79,6 +90,7 @@ class TestScanJobService:
             eol_status_repository,
             scan_job_repository,
             queue,
+            scanner_usecase=scanner_usecase,
         )
 
         job = await service.enqueue_scan("octocat", "octocat")
@@ -93,6 +105,102 @@ class TestScanJobService:
             }
         )
         assert created_jobs[0].requested_by == "octocat"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_scan_rejects_when_no_repository_is_selected(self):
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_active_by_org.return_value = None
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=False,
+            )
+        ]
+
+        service = ScanJobService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        with pytest.raises(ValueError, match="No repositories selected for scanning"):
+            await service.enqueue_scan("octocat", "octocat")
+
+        scan_job_repository.create.assert_not_awaited()
+        queue.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_selection_replaces_selection_set(self):
+        org_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            ),
+            Repository(
+                id="repo-2",
+                github_id=2,
+                name="worker",
+                full_name="octocat/worker",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=False,
+            ),
+        ]
+
+        service = ScanJobService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.update_selection(
+            "octocat",
+            "gho_test",
+            "octocat",
+            ["repo-2"],
+        )
+
+        repo_repository.replace_selection.assert_awaited_once_with(
+            "octocat", ["repo-2"]
+        )
+        assert result == {"selected_repository_count": 1}
 
 
 class TestScanJobWorkerService:
@@ -143,6 +251,83 @@ class TestScanJobWorkerService:
         scan_job_repository.start.assert_awaited_once_with("job-1", 0)
         scan_job_repository.mark_completed.assert_awaited_once_with("job-1")
         queue.send_messages.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_queues_only_selected_repositories(self):
+        job = ScanJob(id="job-1", org_id="octocat", requested_by="octocat")
+
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = job
+        scan_job_repository.start.return_value = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+        )
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            ),
+            Repository(
+                id="repo-2",
+                github_id=2,
+                name="worker",
+                full_name="octocat/worker",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=False,
+            ),
+        ]
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_BOOTSTRAP,
+                "job_id": "job-1",
+                "org_id": "octocat",
+            }
+        )
+
+        scan_job_repository.start.assert_awaited_once_with("job-1", 1)
+        queue.send_messages.assert_awaited_once_with(
+            [
+                {
+                    "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                    "job_id": "job-1",
+                    "org_id": "octocat",
+                    "repo_id": "repo-1",
+                }
+            ]
+        )
 
     @pytest.mark.asyncio
     async def test_repository_scan_finalizes_partial_failure(self):

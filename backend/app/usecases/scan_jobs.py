@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.domain.entities import (
     ACTIVE_SCAN_JOB_STATUSES,
@@ -46,28 +46,22 @@ class ScanJobService:
     async def get_scan_results(
         self, org_id: str, github_access_token: str, user_login: str
     ) -> Dict[str, Any]:
-        await self.scanner_usecase.list_repositories(
+        repos = await self.scanner_usecase.list_repositories(
             org_id, github_access_token, user_login
         )
         statuses = await self.scanner_usecase.get_saved_results(org_id)
         latest_job = await self.scan_job_repository.find_latest_by_org(org_id)
-        repos = await self.repo_repository.find_by_org(org_id)
-        repo_name_by_id = {repo.id: repo.full_name for repo in repos}
+        statuses_by_repo = _group_statuses_by_repo(
+            statuses, {repo.id for repo in repos}
+        )
         return {
             "repository_count": len(repos),
-            "statuses": [
-                {
-                    "repo_id": repo_name_by_id.get(status.repo_id, status.repo_id),
-                    "framework": status.framework_name,
-                    "version": status.current_version,
-                    "is_eol": status.is_eol,
-                    "eol_date": (
-                        status.eol_date.isoformat() if status.eol_date else None
-                    ),
-                    "last_scanned_at": status.last_scanned_at.isoformat(),
-                    "source_path": status.source_path,
-                }
-                for status in statuses
+            "selected_repository_count": len(
+                [repo for repo in repos if repo.is_selected]
+            ),
+            "repositories": [
+                _serialize_repository(repo, statuses_by_repo.get(repo.id, []))
+                for repo in repos
             ],
             "latest_job": serialize_scan_job(latest_job),
         }
@@ -80,6 +74,14 @@ class ScanJobService:
         organization = await self.org_repository.find_by_login(org_id)
         if not organization or not organization.github_access_token:
             raise ValueError("No GitHub token is available for this account")
+
+        repositories = await self.scanner_usecase.list_repositories(
+            org_id,
+            organization.github_access_token,
+            requested_by,
+        )
+        if not any(repo.is_selected for repo in repositories):
+            raise ValueError("No repositories selected for scanning")
 
         job = ScanJob(
             id=str(uuid.uuid4()),
@@ -112,6 +114,33 @@ class ScanJobService:
         if not job or job.org_id != org_id:
             return None
         return job
+
+    async def update_selection(
+        self,
+        org_id: str,
+        github_access_token: str,
+        user_login: str,
+        selected_repo_ids: List[str],
+    ) -> Dict[str, Any]:
+        normalized_selected_repo_ids = sorted(set(selected_repo_ids))
+        repositories = await self.scanner_usecase.list_repositories(
+            org_id,
+            github_access_token,
+            user_login,
+        )
+        current_repo_ids = {repo.id for repo in repositories}
+        unknown_repo_ids = sorted(set(normalized_selected_repo_ids) - current_repo_ids)
+        if unknown_repo_ids:
+            raise ValueError(
+                f"Unknown repositories in selection: {', '.join(unknown_repo_ids)}"
+            )
+
+        await self.repo_repository.replace_selection(
+            org_id, normalized_selected_repo_ids
+        )
+        return {
+            "selected_repository_count": len(normalized_selected_repo_ids),
+        }
 
 
 class ScanJobWorkerService:
@@ -165,9 +194,10 @@ class ScanJobWorkerService:
         repos = await self.scanner_usecase.list_repositories(
             org_id, organization.github_access_token, job.requested_by
         )
-        await self.scan_job_repository.start(job_id, len(repos))
+        selected_repos = [repo for repo in repos if repo.is_selected]
+        await self.scan_job_repository.start(job_id, len(selected_repos))
 
-        if not repos:
+        if not selected_repos:
             await self.scan_job_repository.mark_completed(job_id)
             return
 
@@ -178,7 +208,7 @@ class ScanJobWorkerService:
                 "org_id": org_id,
                 "repo_id": repo.id,
             }
-            for repo in repos
+            for repo in selected_repos
         ]
 
         try:
@@ -284,3 +314,45 @@ def _build_failure_summary(job: ScanJob) -> str:
     if job.error_message:
         return f"{summary} Last error: {job.error_message}"
     return summary
+
+
+def _group_statuses_by_repo(
+    statuses, active_repo_ids: set[str]
+) -> Dict[str, List[Any]]:
+    grouped: Dict[str, List[Any]] = {}
+    for status in statuses:
+        if status.repo_id not in active_repo_ids:
+            continue
+        grouped.setdefault(status.repo_id, []).append(status)
+    return grouped
+
+
+def _serialize_repository(repo, statuses) -> Dict[str, Any]:
+    primary_status = None
+    if statuses:
+        primary_status = sorted(
+            statuses,
+            key=lambda status: (
+                status.last_scanned_at,
+                status.is_eol,
+                status.framework_name,
+            ),
+            reverse=True,
+        )[0]
+    return {
+        "repository_id": repo.id,
+        "repo_id": repo.full_name,
+        "is_selected": repo.is_selected,
+        "framework": primary_status.framework_name if primary_status else None,
+        "version": primary_status.current_version if primary_status else None,
+        "is_eol": primary_status.is_eol if primary_status else None,
+        "eol_date": (
+            primary_status.eol_date.isoformat()
+            if primary_status and primary_status.eol_date
+            else None
+        ),
+        "last_scanned_at": (
+            primary_status.last_scanned_at.isoformat() if primary_status else None
+        ),
+        "source_path": primary_status.source_path if primary_status else None,
+    }

@@ -1,6 +1,6 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update, desc
+from sqlalchemy import select, delete, update, desc, func
 import uuid
 from app.domain.interfaces import (
     IUserRepository,
@@ -8,6 +8,7 @@ from app.domain.interfaces import (
     IRepoRepository,
     IEolStatusRepository,
     IScanJobRepository,
+    ITokenUsageRepository,
 )
 from app.domain.entities import (
     ACTIVE_SCAN_JOB_STATUSES,
@@ -17,6 +18,7 @@ from app.domain.entities import (
     Repository,
     EolStatus,
     ScanJob,
+    TokenUsageEvent,
 )
 from app.adapters.models import (
     UserModel,
@@ -24,6 +26,7 @@ from app.adapters.models import (
     RepoModel,
     EolStatusModel,
     ScanJobModel,
+    TokenUsageEventModel,
 )
 from datetime import UTC, datetime
 
@@ -125,6 +128,14 @@ class RepoRepository(IRepoRepository):
         )
         return [r.to_domain() for r in result.scalars().all()]
 
+    async def find_selected_by_org(self, org_id: str) -> List[Repository]:
+        result = await self.session.execute(
+            select(RepoModel)
+            .where(RepoModel.org_id == org_id)
+            .where(RepoModel.is_selected.is_(True))
+        )
+        return [r.to_domain() for r in result.scalars().all()]
+
     async def save(self, repo: Repository) -> Repository:
         # Check if repo with this github_id already exists
         existing = await self.session.execute(
@@ -138,6 +149,7 @@ class RepoRepository(IRepoRepository):
             model.org_id = repo.org_id
             model.owner_login = repo.owner_login
             model.default_branch = repo.default_branch
+            model.is_selected = repo.is_selected
         else:
             model = RepoModel(
                 id=repo.id if repo.id else str(uuid.uuid4()),
@@ -147,6 +159,7 @@ class RepoRepository(IRepoRepository):
                 org_id=repo.org_id,
                 owner_login=repo.owner_login,
                 default_branch=repo.default_branch,
+                is_selected=repo.is_selected,
             )
             self.session.add(model)
 
@@ -159,6 +172,23 @@ class RepoRepository(IRepoRepository):
         )
         model = result.scalar_one_or_none()
         return model.to_domain() if model else None
+
+    async def replace_selection(
+        self, org_id: str, selected_repo_ids: List[str]
+    ) -> None:
+        await self.session.execute(
+            update(RepoModel)
+            .where(RepoModel.org_id == org_id)
+            .values(is_selected=False)
+        )
+        if selected_repo_ids:
+            await self.session.execute(
+                update(RepoModel)
+                .where(RepoModel.org_id == org_id)
+                .where(RepoModel.id.in_(selected_repo_ids))
+                .values(is_selected=True)
+            )
+        await self.session.flush()
 
 
 class EolStatusRepository(IEolStatusRepository):
@@ -203,6 +233,16 @@ class EolStatusRepository(IEolStatusRepository):
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _current_month_bounds(now: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    current = now or _utcnow_naive()
+    period_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if period_start.month == 12:
+        period_end = period_start.replace(year=period_start.year + 1, month=1)
+    else:
+        period_end = period_start.replace(month=period_start.month + 1)
+    return period_start, period_end
 
 
 class ScanJobRepository(IScanJobRepository):
@@ -320,3 +360,36 @@ class ScanJobRepository(IScanJobRepository):
         )
         await self.session.flush()
         return await self.find_by_id(job_id)
+
+
+class TokenUsageRepository(ITokenUsageRepository):
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def save(self, event: TokenUsageEvent) -> TokenUsageEvent:
+        model = TokenUsageEventModel(
+            id=str(uuid.uuid4()),
+            user_id=event.user_id,
+            provider=event.provider,
+            model=event.model,
+            input_tokens=event.input_tokens,
+            output_tokens=event.output_tokens,
+            total_tokens=event.total_tokens,
+            recorded_at=event.recorded_at,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return model.to_domain()
+
+    async def get_current_month_total_tokens(
+        self, user_id: str, now: Optional[datetime] = None
+    ) -> int:
+        period_start, period_end = _current_month_bounds(now)
+        result = await self.session.execute(
+            select(func.coalesce(func.sum(TokenUsageEventModel.total_tokens), 0)).where(
+                TokenUsageEventModel.user_id == user_id,
+                TokenUsageEventModel.recorded_at >= period_start,
+                TokenUsageEventModel.recorded_at < period_end,
+            )
+        )
+        return int(result.scalar() or 0)

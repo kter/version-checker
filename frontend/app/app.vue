@@ -44,6 +44,9 @@
             </template>
             <template v-else>
               <div class="flex items-center gap-3 pl-3 border-l border-gray-200 dark:border-gray-800">
+                <span class="hidden md:inline-flex items-center rounded-full bg-gray-100/80 dark:bg-gray-900/80 px-3 py-1 text-xs font-semibold text-gray-600 dark:text-gray-300">
+                  {{ $t('monthly_usage_label') }}: {{ monthlyTokenUsageDisplay }}
+                </span>
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300 hidden sm:block">
                   {{ username }}
                 </span>
@@ -72,15 +75,31 @@
 </template>
 
 <script setup>
-const { locale, locales, setLocale } = useI18n()
+const { locale, locales, setLocale, t } = useI18n()
 const availableLocales = computed(() => locales.value)
-const { isAuthenticated, username, syncFromStorage, clearAuth } = useAuth()
+const { token, isAuthenticated, username, syncFromStorage, clearAuth } = useAuth()
+const { totalTokens, isLoading: isMonthlyTokenUsageLoading, clear: clearMonthlyTokenUsage, fetchCurrentMonthUsage } = useMonthlyTokenUsage()
 
 useHead({
   title: 'Version Checker'
 })
 
 const config = useRuntimeConfig()
+const formattedMonthlyTokenUsage = computed(() => {
+  if (totalTokens.value === null) {
+    return null
+  }
+  return new Intl.NumberFormat(locale.value).format(totalTokens.value)
+})
+const monthlyTokenUsageDisplay = computed(() => {
+  if (isMonthlyTokenUsageLoading.value) {
+    return '...'
+  }
+  if (formattedMonthlyTokenUsage.value === null) {
+    return '-'
+  }
+  return `${formattedMonthlyTokenUsage.value} ${t('tokens_unit')}`
+})
 
 // Check auth state on mount
 onMounted(() => {
@@ -91,6 +110,18 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('storage', syncFromStorage)
 })
+
+watch(
+  () => token.value,
+  async (authToken) => {
+    if (authToken) {
+      await fetchCurrentMonthUsage()
+      return
+    }
+    clearMonthlyTokenUsage()
+  },
+  { immediate: true }
+)
 
 const login = () => {
   window.location.href = `${config.public.apiBase}/auth/login`

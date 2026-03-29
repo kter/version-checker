@@ -188,7 +188,8 @@ class TestScanEndpoints:
         fake_service.get_scan_results = AsyncMock(
             return_value={
                 "repository_count": 1,
-                "statuses": [],
+                "selected_repository_count": 1,
+                "repositories": [],
                 "latest_job": None,
             }
         )
@@ -211,9 +212,43 @@ class TestScanEndpoints:
         assert response.status_code == 200
         assert response.json() == {
             "repository_count": 1,
-            "statuses": [],
+            "selected_repository_count": 1,
+            "repositories": [],
             "latest_job": None,
         }
+
+    @pytest.mark.asyncio
+    async def test_put_selection_updates_selection(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+
+        fake_service = MagicMock()
+        fake_service.update_selection = AsyncMock(
+            return_value={"selected_repository_count": 1}
+        )
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.put(
+                "/api/v1/scan/orgs/test-org/selection",
+                json={"selected_repo_ids": ["repo-1"]},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"selected_repository_count": 1}
 
     @pytest.mark.asyncio
     async def test_post_scan_enqueues_job(self, app_with_mocks, mock_db_session):
@@ -314,4 +349,45 @@ class TestScanEndpoints:
             "error_message": None,
             "created_at": "2026-03-28T11:59:55",
             "updated_at": "2026-03-28T12:00:05",
+        }
+
+
+class TestUsageEndpoints:
+    @pytest.mark.asyncio
+    async def test_get_current_month_usage(self, app_with_mocks, mock_db_session):
+        from app.api.auth_deps import get_current_user
+
+        mock_result = MagicMock()
+        mock_result.scalar.return_value = 3456
+        mock_db_session.execute = AsyncMock(return_value=mock_result)
+
+        async def override_current_user():
+            return User(
+                id="user-1",
+                github_id=1,
+                username="alice",
+                github_access_token="token",
+            )
+
+        app_with_mocks.dependency_overrides[get_current_user] = override_current_user
+
+        transport = ASGITransport(app=app_with_mocks)
+        with patch(
+            "app.api.routes.usage._current_month_window",
+            return_value=(
+                datetime(2026, 3, 1, 0, 0, 0),
+                datetime(2026, 4, 1, 0, 0, 0),
+            ),
+        ):
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.get("/api/v1/usage/current-month")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "year_month": "2026-03",
+            "total_tokens": 3456,
+            "period_start": "2026-03-01T00:00:00",
+            "period_end": "2026-04-01T00:00:00",
         }

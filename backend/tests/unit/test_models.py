@@ -7,6 +7,7 @@ from app.adapters.models import (
     OrgModel,
     RepoModel,
     ScanJobModel,
+    TokenUsageEventModel,
     UserModel,
 )
 
@@ -58,6 +59,7 @@ class TestRepoModel:
         assert repo.full_name == "org/my-app"
         assert repo.org_id == "o1"
         assert repo.default_branch == "develop"
+        assert repo.is_selected is True
 
     def test_to_domain_no_org(self):
         model = RepoModel(
@@ -68,9 +70,11 @@ class TestRepoModel:
             org_id=None,
             owner_login="user",
             default_branch="main",
+            is_selected=False,
         )
         repo = model.to_domain()
         assert repo.org_id is None
+        assert repo.is_selected is False
 
 
 class TestOrgModel:
@@ -139,3 +143,28 @@ class TestScanJobModel:
         assert job.completed_repos == 1
         assert job.created_at == created_at
         assert job.updated_at == updated_at
+
+
+class TestTokenUsageEventModel:
+    def test_to_domain(self):
+        recorded_at = datetime(2026, 3, 28, 10, 0, 0)
+        model = TokenUsageEventModel(
+            id="usage-1",
+            user_id="u1",
+            provider="openai",
+            model="gpt-5.4",
+            input_tokens=120,
+            output_tokens=30,
+            total_tokens=150,
+            recorded_at=recorded_at,
+        )
+
+        event = model.to_domain()
+
+        assert event.user_id == "u1"
+        assert event.provider == "openai"
+        assert event.model == "gpt-5.4"
+        assert event.input_tokens == 120
+        assert event.output_tokens == 30
+        assert event.total_tokens == 150
+        assert event.recorded_at == recorded_at

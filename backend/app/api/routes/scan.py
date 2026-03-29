@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.usecases.scanner import ScanRepositoryUseCase
 from app.usecases.scan_jobs import ScanJobService, serialize_scan_job
@@ -14,6 +15,10 @@ from app.api.auth_deps import verify_org_access
 from app.domain.entities import User
 
 router = APIRouter(prefix="/api/v1/scan", tags=["Scan"])
+
+
+class SelectionUpdateRequest(BaseModel):
+    selected_repo_ids: list[str]
 
 
 async def get_scan_usecase(
@@ -54,6 +59,29 @@ async def get_organization_scan_results(
         return await service.get_scan_results(
             org_id, user.github_access_token, user.username
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/orgs/{org_id}/selection")
+async def update_repository_selection(
+    org_id: str,
+    payload: SelectionUpdateRequest,
+    service: ScanJobService = Depends(get_scan_job_service),
+    user: User = Depends(verify_org_access),
+):
+    """Update the selected repositories for an organization."""
+    try:
+        return await service.update_selection(
+            org_id,
+            user.github_access_token,
+            user.username,
+            payload.selected_repo_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:
         raise
     except Exception as e:

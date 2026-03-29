@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, nextTick } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import App from '../../app/app.vue'
@@ -26,6 +26,9 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 })
 
+const fetchMock = vi.fn()
+vi.stubGlobal('$fetch', fetchMock)
+
 const AppHarness = defineComponent({
   components: { App },
   setup() {
@@ -37,15 +40,20 @@ const AppHarness = defineComponent({
 describe('App', () => {
   beforeEach(() => {
     localStorageMock.clear()
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue({
+      total_tokens: 3456,
+    })
   })
 
   it('shows the login button when no auth state is stored', async () => {
     const wrapper = await mountSuspended(AppHarness)
 
     expect(wrapper.text()).toContain('Login with GitHub')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('hydrates auth state from storage on mount', async () => {
+  it('hydrates auth state from storage on mount and shows monthly token usage', async () => {
     localStorage.setItem('auth_token', 'token-1')
     localStorage.setItem('auth_user', 'alice')
     localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
@@ -54,6 +62,11 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('alice')
     expect(wrapper.text()).not.toContain('Login with GitHub')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/usage/current-month',
+      { headers: { Authorization: 'Bearer token-1' } }
+    )
+    expect(wrapper.text()).toContain('This month: 3,456 tokens')
   })
 
   it('reacts to auth state changes after the app is mounted', async () => {
@@ -63,8 +76,13 @@ describe('App', () => {
 
     wrapper.vm.setAuth('token-2', 'octocat', [{ id: 2, login: 'github' }])
     await nextTick()
+    await Promise.resolve()
 
     expect(wrapper.text()).toContain('octocat')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/usage/current-month',
+      { headers: { Authorization: 'Bearer token-2' } }
+    )
     expect(localStorage.getItem('auth_orgs')).toBe(
       JSON.stringify([{ id: 2, login: 'github' }])
     )
@@ -76,5 +94,17 @@ describe('App', () => {
     expect(localStorage.getItem('auth_token')).toBeNull()
     expect(localStorage.getItem('auth_user')).toBeNull()
     expect(localStorage.getItem('auth_orgs')).toBeNull()
+  })
+
+  it('falls back to a dash when the usage request fails', async () => {
+    fetchMock.mockReset()
+    fetchMock.mockRejectedValue(new Error('usage failed'))
+    localStorage.setItem('auth_token', 'token-1')
+    localStorage.setItem('auth_user', 'alice')
+    localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
+
+    const wrapper = await mountSuspended(AppHarness)
+
+    expect(wrapper.text()).toContain('This month: -')
   })
 })

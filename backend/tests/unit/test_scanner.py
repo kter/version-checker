@@ -88,8 +88,8 @@ class TestScanRepositoryUseCase:
         status_repository.find_by_org.assert_called_once_with("test-org")
 
     @pytest.mark.asyncio
-    async def test_list_repositories_reuses_saved_repositories(self):
-        saved_repo = Repository(
+    async def test_list_repositories_syncs_and_preserves_existing_selection(self):
+        existing_repo = Repository(
             id="repo-db-1",
             github_id=101,
             name="web",
@@ -97,18 +97,68 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
+            is_selected=True,
+        )
+        discovered_existing_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+        discovered_new_repo = Repository(
+            id="",
+            github_id=102,
+            name="worker",
+            full_name="test-org/worker",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+        saved_existing_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=True,
+        )
+        saved_new_repo = Repository(
+            id="repo-db-2",
+            github_id=102,
+            name="worker",
+            full_name="test-org/worker",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=False,
         )
 
         repo_repository = AsyncMock()
-        repo_repository.find_by_org.return_value = [saved_repo]
+        repo_repository.find_by_org.return_value = [existing_repo]
+        repo_repository.save.side_effect = [saved_existing_repo, saved_new_repo]
         status_repository = AsyncMock()
 
         usecase = ScanRepositoryUseCase(repo_repository, status_repository)
-        results = await usecase.list_repositories("test-org", "gho_test", "octocat")
 
-        assert results == [saved_repo]
+        with patch(
+            "app.usecases.scanner.GitHubClient.list_org_repositories",
+            new=AsyncMock(return_value=[discovered_existing_repo, discovered_new_repo]),
+        ):
+            results = await usecase.list_repositories("test-org", "gho_test", "octocat")
+
+        assert results == [saved_existing_repo, saved_new_repo]
         repo_repository.find_by_org.assert_awaited_once_with("test-org")
-        repo_repository.save.assert_not_awaited()
+        assert repo_repository.save.await_count == 2
+        first_saved_repo = repo_repository.save.await_args_list[0].args[0]
+        second_saved_repo = repo_repository.save.await_args_list[1].args[0]
+        assert first_saved_repo.id == "repo-db-1"
+        assert first_saved_repo.is_selected is True
+        assert second_saved_repo.is_selected is False
 
     @pytest.mark.asyncio
     async def test_list_repositories_uses_personal_scope_for_authenticated_user(self):
@@ -129,6 +179,7 @@ class TestScanRepositoryUseCase:
             org_id="octocat",
             owner_login="octocat",
             default_branch="main",
+            is_selected=False,
         )
 
         repo_repository = AsyncMock()
@@ -150,19 +201,11 @@ class TestScanRepositoryUseCase:
         assert results == [saved_repo]
         mock_list_user_repositories.assert_awaited_once_with("octocat")
         mock_list_org_repositories.assert_not_awaited()
+        assert repo_repository.save.await_args.args[0].is_selected is False
 
     @pytest.mark.asyncio
-    async def test_execute_scans_and_persists_statuses(self):
-        discovered_repo = Repository(
-            id="",
-            github_id=101,
-            name="web",
-            full_name="test-org/web",
-            org_id="test-org",
-            owner_login="test-org",
-            default_branch="main",
-        )
-        saved_repo = Repository(
+    async def test_execute_scans_selected_repositories_and_persists_statuses(self):
+        selected_repo = Repository(
             id="repo-db-1",
             github_id=101,
             name="web",
@@ -170,6 +213,17 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
+            is_selected=True,
+        )
+        unselected_repo = Repository(
+            id="repo-db-2",
+            github_id=102,
+            name="worker",
+            full_name="test-org/worker",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=False,
         )
         status = EolStatus(
             repo_id="repo-db-1",
@@ -181,8 +235,8 @@ class TestScanRepositoryUseCase:
         )
 
         repo_repository = AsyncMock()
-        repo_repository.find_by_org.return_value = []
-        repo_repository.save.return_value = saved_repo
+        repo_repository.find_by_org.return_value = [selected_repo, unselected_repo]
+        repo_repository.save.side_effect = [selected_repo, unselected_repo]
         status_repository = AsyncMock()
         scanner = AsyncMock()
         scanner.scan_repo.return_value = [status]
@@ -193,13 +247,34 @@ class TestScanRepositoryUseCase:
 
         with patch(
             "app.usecases.scanner.GitHubClient.list_org_repositories",
-            new=AsyncMock(return_value=[discovered_repo]),
+            new=AsyncMock(
+                return_value=[
+                    Repository(
+                        id="",
+                        github_id=101,
+                        name="web",
+                        full_name="test-org/web",
+                        org_id="test-org",
+                        owner_login="test-org",
+                        default_branch="main",
+                    ),
+                    Repository(
+                        id="",
+                        github_id=102,
+                        name="worker",
+                        full_name="test-org/worker",
+                        org_id="test-org",
+                        owner_login="test-org",
+                        default_branch="main",
+                    ),
+                ]
+            ),
         ):
             results = await usecase.execute("test-org", "gho_test", "octocat")
 
         assert results == [status]
-        repo_repository.save.assert_awaited_once()
-        scanner.scan_repo.assert_awaited_once_with(saved_repo, "gho_test")
+        assert repo_repository.save.await_count == 2
+        scanner.scan_repo.assert_awaited_once_with(selected_repo, "gho_test")
         status_repository.replace_for_repo.assert_awaited_once_with(
             "repo-db-1", [status]
         )
@@ -235,6 +310,7 @@ class TestScanRepositoryUseCase:
                 org_id="test-org",
                 owner_login="test-org",
                 default_branch="main",
+                is_selected=True,
             ),
             Repository(
                 id="repo-db-2",
@@ -244,6 +320,7 @@ class TestScanRepositoryUseCase:
                 org_id="test-org",
                 owner_login="test-org",
                 default_branch="main",
+                is_selected=True,
             ),
         ]
         status = EolStatus(

@@ -24,6 +24,7 @@ def sample_repo_data():
         "org_id": "test-org-001",
         "owner_login": "testorg",
         "default_branch": "main",
+        "is_selected": True,
     }
 
 

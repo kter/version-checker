@@ -563,8 +563,7 @@ class ScanRepositoryUseCase:
         self, org_id: str, github_access_token: str, user_login: str
     ) -> List[Repository]:
         saved_repositories = await self.repo_repository.find_by_org(org_id)
-        if saved_repositories:
-            return saved_repositories
+        saved_by_github_id = {repo.github_id: repo for repo in saved_repositories}
 
         github_client = GitHubClient(github_access_token)
         if org_id == user_login:
@@ -574,6 +573,12 @@ class ScanRepositoryUseCase:
 
         persisted_repositories: List[Repository] = []
         for repo in repositories:
+            existing = saved_by_github_id.get(repo.github_id)
+            if existing:
+                repo.id = existing.id
+                repo.is_selected = existing.is_selected
+            else:
+                repo.is_selected = False
             persisted_repositories.append(await self.repo_repository.save(repo))
 
         return persisted_repositories
@@ -584,7 +589,10 @@ class ScanRepositoryUseCase:
         saved_repositories = await self.list_repositories(
             org_id, github_access_token, user_login
         )
-        if not saved_repositories:
+        selected_repositories = [
+            repo for repo in saved_repositories if repo.is_selected
+        ]
+        if not selected_repositories:
             return []
 
         repository_semaphore = asyncio.Semaphore(SCAN_REPOSITORY_CONCURRENCY)
@@ -600,6 +608,6 @@ class ScanRepositoryUseCase:
                     return []
 
         results = await asyncio.gather(
-            *(scan_repository(repo) for repo in saved_repositories)
+            *(scan_repository(repo) for repo in selected_repositories)
         )
         return [status for statuses in results for status in statuses]

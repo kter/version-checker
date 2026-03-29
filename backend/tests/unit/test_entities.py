@@ -1,7 +1,14 @@
 """Unit tests for domain entities."""
 
 from datetime import datetime
-from app.domain.entities import EolStatus, Organization, Repository, ScanJob, User
+from app.domain.entities import (
+    EolStatus,
+    Organization,
+    Repository,
+    ScanJob,
+    TokenUsageEvent,
+    User,
+)
 
 
 class TestUser:
@@ -46,6 +53,7 @@ class TestRepository:
         assert repo.org_id is None
         assert repo.owner_login == ""
         assert repo.default_branch == "main"
+        assert repo.is_selected is True
 
     def test_create_repo_with_org(self):
         repo = Repository(
@@ -59,6 +67,7 @@ class TestRepository:
         )
         assert repo.org_id == "o1"
         assert repo.default_branch == "develop"
+        assert repo.is_selected is True
 
 
 class TestEolStatus:
@@ -95,3 +104,21 @@ class TestScanJob:
         assert job.failed_repos == 0
         assert isinstance(job.created_at, datetime)
         assert isinstance(job.updated_at, datetime)
+
+
+class TestTokenUsageEvent:
+    def test_create_token_usage_event(self):
+        event = TokenUsageEvent(
+            user_id="u1",
+            provider="openai",
+            model="gpt-5.4",
+            input_tokens=120,
+            output_tokens=30,
+            total_tokens=150,
+        )
+
+        assert event.user_id == "u1"
+        assert event.provider == "openai"
+        assert event.model == "gpt-5.4"
+        assert event.total_tokens == 150
+        assert isinstance(event.recorded_at, datetime)
