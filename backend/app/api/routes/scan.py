@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.usecases.scanner import ScanRepositoryUseCase
@@ -8,11 +9,16 @@ from app.adapters.database_repo import (
     OrgRepository,
     RepoRepository,
     ScanJobRepository,
+    UserRepository,
 )
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.infrastructure.database import get_db_session
 from app.api.auth_deps import verify_org_access
 from app.domain.entities import User
+from app.usecases.github_auth import (
+    GITHUB_REAUTH_REQUIRED_DETAIL,
+    GitHubAuthorizationExpiredError,
+)
 
 router = APIRouter(prefix="/api/v1/scan", tags=["Scan"])
 
@@ -33,6 +39,7 @@ async def get_scan_job_service(
     session: AsyncSession = Depends(get_db_session),
 ) -> ScanJobService:
     org_repository = OrgRepository(session)
+    user_repository = UserRepository(session)
     repo_repository = RepoRepository(session)
     eol_status_repository = EolStatusRepository(session)
     scan_job_repository = ScanJobRepository(session)
@@ -40,6 +47,7 @@ async def get_scan_job_service(
     scan_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
     return ScanJobService(
         org_repository,
+        user_repository,
         repo_repository,
         eol_status_repository,
         scan_job_repository,
@@ -59,6 +67,12 @@ async def get_organization_scan_results(
         return await service.get_scan_results(
             org_id, user.github_access_token, user.username
         )
+    except GitHubAuthorizationExpiredError:
+        raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+        raise HTTPException(status_code=500, detail=str(exc))
     except HTTPException:
         raise
     except Exception as e:
@@ -80,6 +94,12 @@ async def update_repository_selection(
             user.username,
             payload.selected_repo_ids,
         )
+    except GitHubAuthorizationExpiredError:
+        raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+        raise HTTPException(status_code=500, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:
@@ -117,6 +137,12 @@ async def scan_organization_repos(
     try:
         job = await service.enqueue_scan(org_id, user.username)
         return serialize_scan_job(job)
+    except GitHubAuthorizationExpiredError:
+        raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+        raise HTTPException(status_code=500, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except HTTPException:

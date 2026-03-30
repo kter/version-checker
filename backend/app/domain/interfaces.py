@@ -12,6 +12,10 @@ from app.domain.entities import (
 
 class IUserRepository(ABC):
     @abstractmethod
+    async def find_by_id(self, user_id: str) -> Optional[User]:
+        pass
+
+    @abstractmethod
     async def find_by_github_id(self, github_id: int) -> Optional[User]:
         pass
 

@@ -294,4 +294,15 @@ describe('Index page', () => {
 
     expect(scanButton?.attributes('disabled')).toBeDefined()
   })
+
+  it('clears auth when repository loading returns 401', async () => {
+    fetchMock.mockRejectedValue({ statusCode: 401 })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    await wrapper.vm.$nextTick()
+
+    expect(localStorage.getItem('auth_token')).toBeNull()
+    expect(localStorage.getItem('auth_user')).toBeNull()
+    expect(localStorage.getItem('auth_orgs')).toBeNull()
+  })
 })

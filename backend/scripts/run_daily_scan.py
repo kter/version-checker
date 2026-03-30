@@ -6,6 +6,7 @@ from app.adapters.database_repo import (
     RepoRepository,
     EolStatusRepository,
     ScanJobRepository,
+    UserRepository,
 )
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.usecases.scan_jobs import ScanJobService
@@ -25,6 +26,7 @@ async def run_daily_scan():
 
     async with AsyncSessionLocal() as session:
         org_repository = OrgRepository(session)
+        user_repository = UserRepository(session)
         organizations = await org_repository.find_all_with_tokens()
 
         if not organizations:
@@ -45,6 +47,7 @@ async def run_daily_scan():
         scanner_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
         scan_job_service = ScanJobService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,

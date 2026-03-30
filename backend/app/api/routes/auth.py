@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-import httpx
 import uuid
 import jwt
 import logging
@@ -13,6 +12,7 @@ from app.infrastructure.config import settings
 from app.infrastructure.database import get_db_session
 from app.adapters.database_repo import OrgRepository, UserRepository
 from app.domain.entities import Organization, User
+from app.usecases.github_auth import GitHubAuthorizationExpiredError, GitHubTokenService
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
@@ -41,104 +41,74 @@ async def callback(
     if not settings.github_client_id or not settings.github_client_secret:
         raise HTTPException(status_code=500, detail="OAuth credentials not configured")
 
-    async with httpx.AsyncClient() as client:
-        # Exchange code for access token
-        token_res = await client.post(
-            "https://github.com/login/oauth/access_token",
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.github_client_id,
-                "client_secret": settings.github_client_secret,
-                "code": code,
-                "redirect_uri": settings.github_redirect_uri,
-            },
+    token_service = GitHubTokenService()
+    try:
+        token_payload = await token_service.exchange_code_for_tokens(code)
+        github_user = await token_service.fetch_github_user(token_payload.access_token)
+        orgs = await token_service.fetch_user_orgs(token_payload.access_token)
+    except GitHubAuthorizationExpiredError as exc:
+        logger.warning(
+            "GitHub token exchange failed: redirect_uri=%s client_id_suffix=%s code_len=%s detail=%s",
+            settings.github_redirect_uri,
+            (settings.github_client_id or "")[-6:],
+            len(code),
+            str(exc),
         )
-        token_data = token_res.json()
+        raise HTTPException(status_code=400, detail=str(exc))
 
-        if "error" in token_data:
-            logger.warning(
-                "GitHub token exchange failed: status=%s error=%s description=%s redirect_uri=%s client_id_suffix=%s code_len=%s",
-                token_res.status_code,
-                token_data.get("error"),
-                token_data.get("error_description"),
-                settings.github_redirect_uri,
-                (settings.github_client_id or "")[-6:],
-                len(code),
-            )
-            raise HTTPException(
-                status_code=400,
-                detail=token_data.get("error_description", token_data["error"]),
-            )
+    # Save user to database
+    user_repo = UserRepository(session)
+    user = User(
+        id=str(uuid.uuid4()),
+        github_id=github_user["id"],
+        username=github_user["login"],
+        email=github_user.get("email"),
+        role="admin",
+        github_access_token=token_payload.access_token,
+        github_refresh_token=token_payload.refresh_token,
+        github_access_token_expires_at=token_payload.access_token_expires_at,
+        github_refresh_token_expires_at=token_payload.refresh_token_expires_at,
+    )
+    saved_user = await user_repo.save(user)
 
-        access_token = token_data.get("access_token")
-
-        # Fetch GitHub user profile
-        user_res = await client.get(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-            },
+    org_repo = OrgRepository(session)
+    accessible_accounts = {
+        saved_user.username: Organization(
+            id=saved_user.username,
+            github_id=saved_user.github_id,
+            name=saved_user.username,
+            login=saved_user.username,
+            github_access_token=token_payload.access_token,
+            token_owner_user_id=saved_user.id,
         )
-        github_user = user_res.json()
-
-        # Save user to database
-        user_repo = UserRepository(session)
-        user = User(
-            id=str(uuid.uuid4()),
-            github_id=github_user["id"],
-            username=github_user["login"],
-            email=github_user.get("email"),
-            role="admin",
+    }
+    for org in orgs:
+        accessible_accounts[org["login"]] = Organization(
+            id=org["login"],
+            github_id=org["id"],
+            name=org.get("login") or org.get("name") or org["login"],
+            login=org["login"],
+            github_access_token=token_payload.access_token,
+            token_owner_user_id=saved_user.id,
         )
-        saved_user = await user_repo.save(user)
 
-        # Fetch user's organizations
-        orgs_res = await client.get(
-            "https://api.github.com/user/orgs",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-            },
-        )
-        orgs = orgs_res.json()
-        org_repo = OrgRepository(session)
-        accessible_accounts = {
-            saved_user.username: Organization(
-                id=saved_user.username,
-                github_id=saved_user.github_id,
-                name=saved_user.username,
-                login=saved_user.username,
-                github_access_token=access_token,
-            )
-        }
-        for org in orgs:
-            accessible_accounts[org["login"]] = Organization(
-                id=org["login"],
-                github_id=org["id"],
-                name=org.get("login") or org.get("name") or org["login"],
-                login=org["login"],
-                github_access_token=access_token,
-            )
+    saved_orgs = await org_repo.save_all(list(accessible_accounts.values()))
 
-        saved_orgs = await org_repo.save_all(list(accessible_accounts.values()))
+    # Create JWT Token
+    payload = {
+        "sub": saved_user.id,
+        "gh_id": saved_user.github_id,
+    }
+    app_token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-        # Create JWT Token
-        payload = {
-            "sub": saved_user.id,
-            "gh_id": saved_user.github_id,
-            "ght": access_token,  # Storing GitHub token in JWT to use it for later org validation
-        }
-        app_token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-
-        return {
-            "access_token": app_token,
-            "user": {
-                "id": saved_user.id,
-                "username": saved_user.username,
-                "github_id": saved_user.github_id,
-            },
-            "organizations": [
-                {"id": org.github_id, "login": org.login} for org in saved_orgs
-            ],
-        }
+    return {
+        "access_token": app_token,
+        "user": {
+            "id": saved_user.id,
+            "username": saved_user.username,
+            "github_id": saved_user.github_id,
+        },
+        "organizations": [
+            {"id": org.github_id, "login": org.login} for org in saved_orgs
+        ],
+    }

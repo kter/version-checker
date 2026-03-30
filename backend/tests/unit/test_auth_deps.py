@@ -17,8 +17,14 @@ class TestVerifyOrgAccess:
             github_access_token="gho_test",
         )
 
-        with patch("app.api.auth_deps.httpx.AsyncClient") as mock_client_cls:
-            result = await verify_org_access("octocat", user)
+        session = AsyncMock()
+        user_repo = MagicMock()
+        user_repo.find_by_id = AsyncMock(return_value=user)
+
+        with patch("app.api.auth_deps.UserRepository", return_value=user_repo), patch(
+            "app.api.auth_deps.httpx.AsyncClient"
+        ) as mock_client_cls:
+            result = await verify_org_access("octocat", user, session)
 
         assert result == user
         mock_client_cls.assert_not_called()
@@ -36,11 +42,16 @@ class TestVerifyOrgAccess:
             status_code=200,
             json=MagicMock(return_value=[{"id": 1, "login": "acme"}]),
         )
+        session = AsyncMock()
+        user_repo = MagicMock()
+        user_repo.find_by_id = AsyncMock(return_value=user)
 
-        with patch("app.api.auth_deps.httpx.AsyncClient") as mock_client_cls:
+        with patch("app.api.auth_deps.UserRepository", return_value=user_repo), patch(
+            "app.api.auth_deps.httpx.AsyncClient"
+        ) as mock_client_cls:
             mock_client_cls.return_value.__aenter__.return_value = mock_client
 
             with pytest.raises(HTTPException) as exc_info:
-                await verify_org_access("other-org", user)
+                await verify_org_access("other-org", user, session)
 
         assert exc_info.value.status_code == 403

@@ -126,4 +126,20 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('This month: -')
   })
+
+  it('clears auth state when the usage request returns 401', async () => {
+    fetchMock.mockReset()
+    fetchMock.mockRejectedValue({ statusCode: 401 })
+    localStorage.setItem('auth_token', 'token-1')
+    localStorage.setItem('auth_user', 'alice')
+    localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
+
+    const wrapper = await mountSuspended(AppHarness)
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Login with GitHub')
+    expect(localStorage.getItem('auth_token')).toBeNull()
+    expect(localStorage.getItem('auth_user')).toBeNull()
+    expect(localStorage.getItem('auth_orgs')).toBeNull()
+  })
 })

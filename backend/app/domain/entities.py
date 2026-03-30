@@ -21,6 +21,7 @@ class Organization:
     name: str
     login: str
     github_access_token: Optional[str] = None
+    token_owner_user_id: Optional[str] = None
 
 
 @dataclass
@@ -32,6 +33,9 @@ class User:
     role: str = "member"  # Simple RBAC
     organizations: List[Organization] = field(default_factory=list)
     github_access_token: Optional[str] = None
+    github_refresh_token: Optional[str] = None
+    github_access_token_expires_at: Optional[datetime] = None
+    github_refresh_token_expires_at: Optional[datetime] = None
 
 
 @dataclass

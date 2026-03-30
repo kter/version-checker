@@ -35,6 +35,15 @@ class UserRepository(IUserRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def find_by_id(self, user_id: str) -> Optional[User]:
+        result = await self.session.execute(
+            select(UserModel).where(UserModel.id == user_id)
+        )
+        model = result.scalar_one_or_none()
+        if model:
+            return model.to_domain()
+        return None
+
     async def find_by_github_id(self, github_id: int) -> Optional[User]:
         result = await self.session.execute(
             select(UserModel).where(UserModel.github_id == github_id)
@@ -56,6 +65,10 @@ class UserRepository(IUserRepository):
             model.username = user.username
             model.email = user.email
             model.role = user.role
+            model.github_access_token = user.github_access_token
+            model.github_refresh_token = user.github_refresh_token
+            model.github_access_token_expires_at = user.github_access_token_expires_at
+            model.github_refresh_token_expires_at = user.github_refresh_token_expires_at
         else:
             # Insert new
             model = UserModel(
@@ -64,6 +77,10 @@ class UserRepository(IUserRepository):
                 username=user.username,
                 email=user.email,
                 role=user.role,
+                github_access_token=user.github_access_token,
+                github_refresh_token=user.github_refresh_token,
+                github_access_token_expires_at=user.github_access_token_expires_at,
+                github_refresh_token_expires_at=user.github_refresh_token_expires_at,
             )
             self.session.add(model)
 
@@ -85,6 +102,7 @@ class OrgRepository(IOrgRepository):
             model.github_id = org.github_id
             model.name = org.name
             model.github_access_token = org.github_access_token
+            model.token_owner_user_id = org.token_owner_user_id
         else:
             model = OrgModel(
                 id=org.id,
@@ -92,6 +110,7 @@ class OrgRepository(IOrgRepository):
                 name=org.name,
                 login=org.login,
                 github_access_token=org.github_access_token,
+                token_owner_user_id=org.token_owner_user_id,
             )
             self.session.add(model)
 
@@ -106,7 +125,10 @@ class OrgRepository(IOrgRepository):
 
     async def find_all_with_tokens(self) -> List[Organization]:
         result = await self.session.execute(
-            select(OrgModel).where(OrgModel.github_access_token.is_not(None))
+            select(OrgModel).where(
+                OrgModel.token_owner_user_id.is_not(None)
+                | OrgModel.github_access_token.is_not(None)
+            )
         )
         return [org.to_domain() for org in result.scalars().all()]
 
