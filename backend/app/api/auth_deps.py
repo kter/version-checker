@@ -1,14 +1,18 @@
 import jwt
-from fastapi import Request, HTTPException, Depends
+from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
-from typing import Dict, Any
 
 from app.infrastructure.config import settings
 from app.infrastructure.database import get_db_session
 from app.adapters.database_repo import UserRepository
 from app.domain.entities import User
+from app.usecases.github_auth import (
+    GITHUB_REAUTH_REQUIRED_DETAIL,
+    GitHubAuthorizationExpiredError,
+    GitHubTokenService,
+)
 
 security = HTTPBearer()
 
@@ -26,24 +30,16 @@ async def get_current_user(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
 
-        # We also stored the GitHub token to make API requests later
-        github_access_token = payload.get("ght")
-
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token payload")
 
         repo = UserRepository(session)
-        # Note: UserRepository uses find_by_github_id, but our ID is uuid.
-        # We need to adapt it. We will fetch by uuid if needed, or by github_id.
-        # Alternatively, let's just use the repo's find_by_github_id if we store github_id in sub.
-        github_id = payload.get("gh_id")
-        user = await repo.find_by_github_id(int(github_id))
+        user = await repo.find_by_id(str(user_id))
+        if user is None and payload.get("gh_id") is not None:
+            user = await repo.find_by_github_id(int(payload["gh_id"]))
 
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
-
-        # Attach token to the user object dynamically for downstream API calls
-        user.github_access_token = github_access_token
         return user
 
     except jwt.PyJWTError:
@@ -53,33 +49,27 @@ async def get_current_user(
 
 
 async def verify_org_access(
-    org_id: str, user: User = Depends(get_current_user)
+    org_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
 ) -> User:
     """
     Verify if the authenticated user has access to the specified account or organization.
     A personal GitHub account is always allowed for the logged-in user.
     In a high-scale app, we might cache this in DynamoDB or the DB.
     """
-    if not hasattr(user, "github_access_token") or not user.github_access_token:
-        raise HTTPException(status_code=401, detail="GitHub access token missing")
+    repo = UserRepository(session)
+    token_service = GitHubTokenService()
+    try:
+        user = await token_service.ensure_user_access_token(repo, user)
+    except GitHubAuthorizationExpiredError:
+        raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
 
     if org_id in {user.username, str(user.github_id)}:
         return user
 
     async with httpx.AsyncClient() as client:
-        orgs_res = await client.get(
-            "https://api.github.com/user/orgs",
-            headers={
-                "Authorization": f"Bearer {user.github_access_token}",
-                "Accept": "application/json",
-            },
-        )
-        if orgs_res.status_code != 200:
-            raise HTTPException(
-                status_code=401, detail="Failed to fetch user orgs from GitHub"
-            )
-
-        orgs = orgs_res.json()
+        orgs = await _fetch_user_orgs(client, repo, token_service, user)
         org_ids = [str(org["id"]) for org in orgs]
         org_logins = [org["login"] for org in orgs]
 
@@ -91,3 +81,53 @@ async def verify_org_access(
             )
 
         return user
+
+
+async def _fetch_user_orgs(
+    client: httpx.AsyncClient,
+    user_repository: UserRepository,
+    token_service: GitHubTokenService,
+    user: User,
+) -> list[dict]:
+    response = await client.get(
+        "https://api.github.com/user/orgs",
+        headers={
+            "Authorization": f"Bearer {user.github_access_token}",
+            "Accept": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    if response.status_code == 200:
+        return response.json()
+    if response.status_code != 401:
+        raise HTTPException(
+            status_code=401, detail="Failed to fetch user orgs from GitHub"
+        )
+    try:
+        refreshed_user = await token_service.ensure_user_access_token(
+            user_repository,
+            user,
+            force_refresh=True,
+        )
+    except GitHubAuthorizationExpiredError:
+        raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
+
+    retry_response = await client.get(
+        "https://api.github.com/user/orgs",
+        headers={
+            "Authorization": f"Bearer {refreshed_user.github_access_token}",
+            "Accept": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    if retry_response.status_code == 200:
+        user.github_access_token = refreshed_user.github_access_token
+        user.github_refresh_token = refreshed_user.github_refresh_token
+        user.github_access_token_expires_at = (
+            refreshed_user.github_access_token_expires_at
+        )
+        user.github_refresh_token_expires_at = (
+            refreshed_user.github_refresh_token_expires_at
+        )
+        return retry_response.json()
+    raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)

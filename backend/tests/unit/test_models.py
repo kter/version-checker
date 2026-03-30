@@ -20,6 +20,8 @@ class TestUserModel:
             username="alice",
             email="alice@example.com",
             role="admin",
+            github_access_token="ghu_test",
+            github_refresh_token="ghr_test",
         )
         user = model.to_domain()
         assert user.id == "u1"
@@ -27,6 +29,8 @@ class TestUserModel:
         assert user.username == "alice"
         assert user.email == "alice@example.com"
         assert user.role == "admin"
+        assert user.github_access_token == "ghu_test"
+        assert user.github_refresh_token == "ghr_test"
 
     def test_to_domain_no_email(self):
         model = UserModel(
@@ -88,10 +92,12 @@ class TestOrgModel:
             name="Test Org",
             login="testorg",
             github_access_token="gho_test",
+            token_owner_user_id="u1",
         )
         assert model.id == "o1"
         assert model.login == "testorg"
         assert model.github_access_token == "gho_test"
+        assert model.token_owner_user_id == "u1"
 
 
 class TestEolStatusModel:

@@ -1,6 +1,7 @@
 """Unit tests for domain entities."""
 
 from datetime import datetime
+
 from app.domain.entities import (
     EolStatus,
     Organization,
@@ -22,7 +23,13 @@ class TestUser:
         assert user.organizations == []
 
     def test_create_user_with_all_fields(self):
-        org = Organization(id="o1", github_id=100, name="Org", login="org")
+        org = Organization(
+            id="o1",
+            github_id=100,
+            name="Org",
+            login="org",
+            token_owner_user_id="u2",
+        )
         user = User(
             id="u2",
             github_id=2,
@@ -30,20 +37,31 @@ class TestUser:
             email="bob@example.com",
             role="admin",
             organizations=[org],
+            github_access_token="ghu_test",
+            github_refresh_token="ghr_test",
         )
         assert user.email == "bob@example.com"
         assert user.role == "admin"
         assert len(user.organizations) == 1
         assert user.organizations[0].login == "org"
+        assert user.github_access_token == "ghu_test"
+        assert user.github_refresh_token == "ghr_test"
 
 
 class TestOrganization:
     def test_create_organization(self):
-        org = Organization(id="o1", github_id=100, name="Test Org", login="testorg")
+        org = Organization(
+            id="o1",
+            github_id=100,
+            name="Test Org",
+            login="testorg",
+            token_owner_user_id="u1",
+        )
         assert org.id == "o1"
         assert org.github_id == 100
         assert org.name == "Test Org"
         assert org.login == "testorg"
+        assert org.token_owner_user_id == "u1"
 
 
 class TestRepository:

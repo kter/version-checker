@@ -3,8 +3,8 @@ type CurrentMonthUsageResponse = {
 }
 
 export const useMonthlyTokenUsage = () => {
-  const config = useRuntimeConfig()
   const { token } = useAuth()
+  const { authedFetch } = useAuthedFetch()
 
   const totalTokens = useState<number | null>('usage.currentMonth.totalTokens', () => null)
   const isLoading = useState<boolean>('usage.currentMonth.isLoading', () => false)
@@ -25,14 +25,7 @@ export const useMonthlyTokenUsage = () => {
     isLoading.value = true
 
     try {
-      const response = await $fetch<CurrentMonthUsageResponse>(
-        `${config.public.apiBase}/usage/current-month`,
-        {
-          headers: {
-            Authorization: `Bearer ${token.value}`
-          }
-        }
-      )
+      const response = await authedFetch<CurrentMonthUsageResponse>('/usage/current-month')
       totalTokens.value = response.total_tokens
     } catch {
       totalTokens.value = null

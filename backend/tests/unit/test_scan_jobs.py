@@ -28,6 +28,7 @@ class TestScanJobService:
         )
 
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         repo_repository = AsyncMock()
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
@@ -36,6 +37,7 @@ class TestScanJobService:
 
         service = ScanJobService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -50,6 +52,7 @@ class TestScanJobService:
     @pytest.mark.asyncio
     async def test_enqueue_scan_creates_bootstrap_job(self):
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -86,6 +89,7 @@ class TestScanJobService:
 
         service = ScanJobService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -109,6 +113,7 @@ class TestScanJobService:
     @pytest.mark.asyncio
     async def test_enqueue_scan_rejects_when_no_repository_is_selected(self):
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -137,6 +142,7 @@ class TestScanJobService:
 
         service = ScanJobService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -153,6 +159,7 @@ class TestScanJobService:
     @pytest.mark.asyncio
     async def test_update_selection_replaces_selection_set(self):
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         repo_repository = AsyncMock()
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
@@ -183,6 +190,7 @@ class TestScanJobService:
 
         service = ScanJobService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -209,6 +217,7 @@ class TestScanJobWorkerService:
         job = ScanJob(id="job-1", org_id="octocat", requested_by="octocat")
 
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -233,6 +242,7 @@ class TestScanJobWorkerService:
 
         worker = ScanJobWorkerService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -257,6 +267,7 @@ class TestScanJobWorkerService:
         job = ScanJob(id="job-1", org_id="octocat", requested_by="octocat")
 
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -302,6 +313,7 @@ class TestScanJobWorkerService:
 
         worker = ScanJobWorkerService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -352,6 +364,7 @@ class TestScanJobWorkerService:
         )
 
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -379,6 +392,7 @@ class TestScanJobWorkerService:
 
         worker = ScanJobWorkerService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,
@@ -423,6 +437,7 @@ class TestScanJobWorkerService:
         )
 
         org_repository = AsyncMock()
+        user_repository = AsyncMock()
         org_repository.find_by_login.return_value = Organization(
             id="octocat",
             github_id=1,
@@ -440,6 +455,7 @@ class TestScanJobWorkerService:
 
         worker = ScanJobWorkerService(
             org_repository,
+            user_repository,
             repo_repository,
             eol_status_repository,
             scan_job_repository,

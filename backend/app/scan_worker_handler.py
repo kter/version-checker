@@ -8,6 +8,7 @@ from app.adapters.database_repo import (
     OrgRepository,
     RepoRepository,
     ScanJobRepository,
+    UserRepository,
 )
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.infrastructure.database import get_session_maker
@@ -24,6 +25,7 @@ async def _process_record(record: Dict[str, Any]) -> None:
     async with session_maker() as session:
         try:
             org_repository = OrgRepository(session)
+            user_repository = UserRepository(session)
             repo_repository = RepoRepository(session)
             eol_status_repository = EolStatusRepository(session)
             scan_job_repository = ScanJobRepository(session)
@@ -31,6 +33,7 @@ async def _process_record(record: Dict[str, Any]) -> None:
             scan_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
             worker = ScanJobWorkerService(
                 org_repository,
+                user_repository,
                 repo_repository,
                 eol_status_repository,
                 scan_job_repository,

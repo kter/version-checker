@@ -2,11 +2,14 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from app.domain.entities import (
     ACTIVE_SCAN_JOB_STATUSES,
     SCAN_JOB_STATUS_COMPLETED,
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
+    Organization,
     ScanJob,
 )
 from app.domain.interfaces import (
@@ -14,6 +17,12 @@ from app.domain.interfaces import (
     IOrgRepository,
     IRepoRepository,
     IScanJobRepository,
+    IUserRepository,
+)
+from app.usecases.github_auth import (
+    GITHUB_REAUTH_REQUIRED_DETAIL,
+    GitHubAuthorizationExpiredError,
+    GitHubTokenService,
 )
 from app.usecases.scanner import FrameworkEolScanner, ScanRepositoryUseCase
 
@@ -27,17 +36,21 @@ class ScanJobService:
     def __init__(
         self,
         org_repository: IOrgRepository,
+        user_repository: IUserRepository,
         repo_repository: IRepoRepository,
         eol_status_repository: IEolStatusRepository,
         scan_job_repository: IScanJobRepository,
         queue,
         scanner_usecase: Optional[ScanRepositoryUseCase] = None,
+        token_service: Optional[GitHubTokenService] = None,
     ):
         self.org_repository = org_repository
+        self.user_repository = user_repository
         self.repo_repository = repo_repository
         self.eol_status_repository = eol_status_repository
         self.scan_job_repository = scan_job_repository
         self.queue = queue
+        self.token_service = token_service or GitHubTokenService()
         self.scanner_usecase = scanner_usecase or ScanRepositoryUseCase(
             repo_repository,
             eol_status_repository,
@@ -72,12 +85,9 @@ class ScanJobService:
             return active_job
 
         organization = await self.org_repository.find_by_login(org_id)
-        if not organization or not organization.github_access_token:
-            raise ValueError("No GitHub token is available for this account")
-
-        repositories = await self.scanner_usecase.list_repositories(
+        repositories = await self._list_repositories_for_organization(
+            organization,
             org_id,
-            organization.github_access_token,
             requested_by,
         )
         if not any(repo.is_selected for repo in repositories):
@@ -142,23 +152,82 @@ class ScanJobService:
             "selected_repository_count": len(normalized_selected_repo_ids),
         }
 
+    async def _list_repositories_for_organization(
+        self,
+        organization: Optional[Organization],
+        org_id: str,
+        user_login: str,
+    ) -> List:
+        if not organization:
+            raise ValueError("No GitHub token is available for this account")
+        access_token = await self._get_organization_access_token(organization)
+        try:
+            return await self.scanner_usecase.list_repositories(
+                org_id,
+                access_token,
+                user_login,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                raise
+        refreshed_token = await self._get_organization_access_token(
+            organization,
+            force_refresh=True,
+        )
+        return await self.scanner_usecase.list_repositories(
+            org_id,
+            refreshed_token,
+            user_login,
+        )
+
+    async def _get_organization_access_token(
+        self,
+        organization: Organization,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
+        if organization.token_owner_user_id:
+            user = await self.user_repository.find_by_id(
+                organization.token_owner_user_id
+            )
+            if user:
+                user = await self.token_service.ensure_user_access_token(
+                    self.user_repository,
+                    user,
+                    force_refresh=force_refresh,
+                )
+                if user.github_access_token:
+                    if organization.github_access_token != user.github_access_token:
+                        organization.github_access_token = user.github_access_token
+                        await self.org_repository.save(organization)
+                    return user.github_access_token
+
+        if organization.github_access_token and not force_refresh:
+            return organization.github_access_token
+
+        raise GitHubAuthorizationExpiredError(GITHUB_REAUTH_REQUIRED_DETAIL)
+
 
 class ScanJobWorkerService:
     def __init__(
         self,
         org_repository: IOrgRepository,
+        user_repository: IUserRepository,
         repo_repository: IRepoRepository,
         eol_status_repository: IEolStatusRepository,
         scan_job_repository: IScanJobRepository,
         queue,
         scanner_usecase: Optional[ScanRepositoryUseCase] = None,
         scanner: Optional[FrameworkEolScanner] = None,
+        token_service: Optional[GitHubTokenService] = None,
     ):
         self.org_repository = org_repository
+        self.user_repository = user_repository
         self.repo_repository = repo_repository
         self.eol_status_repository = eol_status_repository
         self.scan_job_repository = scan_job_repository
         self.queue = queue
+        self.token_service = token_service or GitHubTokenService()
         self.scanner_usecase = scanner_usecase or ScanRepositoryUseCase(
             repo_repository,
             eol_status_repository,
@@ -183,17 +252,27 @@ class ScanJobWorkerService:
             return
 
         organization = await self.org_repository.find_by_login(org_id)
-        if not organization or not organization.github_access_token:
+        if not organization:
             await self.scan_job_repository.finalize(
                 job_id,
                 SCAN_JOB_STATUS_FAILED,
-                "No GitHub token is available for this account",
+                GITHUB_REAUTH_REQUIRED_DETAIL,
             )
             return
 
-        repos = await self.scanner_usecase.list_repositories(
-            org_id, organization.github_access_token, job.requested_by
-        )
+        try:
+            repos = await self._list_repositories_for_organization(
+                organization,
+                org_id,
+                job.requested_by,
+            )
+        except GitHubAuthorizationExpiredError:
+            await self.scan_job_repository.finalize(
+                job_id,
+                SCAN_JOB_STATUS_FAILED,
+                GITHUB_REAUTH_REQUIRED_DETAIL,
+            )
+            return
         selected_repos = [repo for repo in repos if repo.is_selected]
         await self.scan_job_repository.start(job_id, len(selected_repos))
 
@@ -231,9 +310,10 @@ class ScanJobWorkerService:
             return
 
         organization = await self.org_repository.find_by_login(org_id)
-        if not organization or not organization.github_access_token:
+        if not organization:
             updated_job = await self.scan_job_repository.record_repo_failure(
-                job_id, "No GitHub token is available for this account"
+                job_id,
+                GITHUB_REAUTH_REQUIRED_DETAIL,
             )
             await self._finalize_if_ready(updated_job)
             return
@@ -247,11 +327,19 @@ class ScanJobWorkerService:
             return
 
         try:
-            statuses = await self.scanner.scan_repo(
-                repository, organization.github_access_token
+            access_token = await self._get_organization_access_token(organization)
+            statuses = await self._scan_repository_with_retry(
+                organization,
+                repository,
+                access_token,
             )
             await self.eol_status_repository.replace_for_repo(repository.id, statuses)
             updated_job = await self.scan_job_repository.record_repo_success(job_id)
+        except GitHubAuthorizationExpiredError:
+            updated_job = await self.scan_job_repository.record_repo_failure(
+                job_id,
+                GITHUB_REAUTH_REQUIRED_DETAIL,
+            )
         except Exception as exc:
             logger.exception("Failed to scan repository %s", repository.full_name)
             updated_job = await self.scan_job_repository.record_repo_failure(
@@ -287,6 +375,78 @@ class ScanJobWorkerService:
             SCAN_JOB_STATUS_PARTIAL_FAILED,
             error_message,
         )
+
+    async def _list_repositories_for_organization(
+        self,
+        organization: Optional[Organization],
+        org_id: str,
+        user_login: str,
+    ) -> List:
+        if not organization:
+            raise ValueError("No GitHub token is available for this account")
+        access_token = await self._get_organization_access_token(organization)
+        try:
+            return await self.scanner_usecase.list_repositories(
+                org_id,
+                access_token,
+                user_login,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                raise
+        refreshed_token = await self._get_organization_access_token(
+            organization,
+            force_refresh=True,
+        )
+        return await self.scanner_usecase.list_repositories(
+            org_id,
+            refreshed_token,
+            user_login,
+        )
+
+    async def _scan_repository_with_retry(
+        self,
+        organization: Organization,
+        repository,
+        access_token: str,
+    ) -> List:
+        try:
+            return await self.scanner.scan_repo(repository, access_token)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                raise
+        refreshed_token = await self._get_organization_access_token(
+            organization,
+            force_refresh=True,
+        )
+        return await self.scanner.scan_repo(repository, refreshed_token)
+
+    async def _get_organization_access_token(
+        self,
+        organization: Organization,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
+        if organization.token_owner_user_id:
+            user = await self.user_repository.find_by_id(
+                organization.token_owner_user_id
+            )
+            if user:
+                user = await self.token_service.ensure_user_access_token(
+                    self.user_repository,
+                    user,
+                    force_refresh=force_refresh,
+                )
+                if user.github_access_token:
+                    if organization.github_access_token != user.github_access_token:
+                        organization.github_access_token = user.github_access_token
+                        await self.org_repository.save(organization)
+                    return user.github_access_token
+
+        if organization.github_access_token and not force_refresh:
+            return organization.github_access_token
+
+        raise GitHubAuthorizationExpiredError(GITHUB_REAUTH_REQUIRED_DETAIL)
 
 
 def serialize_scan_job(job: Optional[ScanJob]) -> Optional[Dict[str, Any]]:

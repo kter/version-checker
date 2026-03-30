@@ -190,8 +190,8 @@
 </template>
 
 <script setup>
-const config = useRuntimeConfig()
-const { organizations, syncFromStorage } = useAuth()
+const { organizations, syncFromStorage, consumeAuthError } = useAuth()
+const { authedFetch } = useAuthedFetch()
 const { t } = useI18n()
 
 const isScanning = ref(false)
@@ -270,6 +270,11 @@ const scanJobStatusLabel = computed(() => {
 })
 
 function initializeSelectedOrg() {
+  const authErrorMessage = consumeAuthError() || consumeAuthErrorMessage()
+  if (authErrorMessage) {
+    error.value = authErrorMessage
+  }
+
   if (userOrgs.value.length === 0) {
     selectedOrg.value = ''
     repositories.value = []
@@ -364,13 +369,33 @@ function setAllRepositorySelections(isSelected) {
   }))
 }
 
+async function loadScanJob(jobId) {
+  return await authedFetch(`/scan/orgs/${selectedOrg.value}/jobs/${jobId}`)
+}
+
+async function loadRepositories() {
+  return await authedFetch(`/scan/orgs/${selectedOrg.value}`)
+}
+
+async function persistSelection() {
+  return await authedFetch(`/scan/orgs/${selectedOrg.value}/selection`, {
+    method: 'PUT',
+    body: {
+      selected_repo_ids: selectedRepositoryIds.value
+    }
+  })
+}
+
+async function startScan() {
+  return await authedFetch(`/scan/orgs/${selectedOrg.value}`, {
+    method: 'POST'
+  })
+}
+
 async function pollJobStatus(jobId) {
   if (!selectedOrg.value) return
   try {
-    const token = localStorage.getItem('auth_token')
-    const response = await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}/jobs/${jobId}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const response = await loadScanJob(jobId)
     syncJobState(response)
     if (TERMINAL_SCAN_JOB_STATUSES.has(response.status)) {
       isScanning.value = false
@@ -404,10 +429,7 @@ async function loadData(options = {}) {
     repositories.value = []
   }
   try {
-    const token = localStorage.getItem('auth_token')
-    const response = await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const response = await loadRepositories()
     applyRepositoryResponse(response)
     syncJobState(response.latest_job)
   } catch (err) {
@@ -426,14 +448,7 @@ async function saveSelection() {
   isSavingSelection.value = true
   error.value = ''
   try {
-    const token = localStorage.getItem('auth_token')
-    await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}/selection`, {
-      method: 'PUT',
-      body: {
-        selected_repo_ids: selectedRepositoryIds.value
-      },
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    await persistSelection()
     await loadData({ preserveExisting: true })
   } catch (err) {
     if (err.data?.detail) {
@@ -451,11 +466,7 @@ async function scanOrganization() {
   isScanning.value = true
   error.value = ''
   try {
-    const token = localStorage.getItem('auth_token')
-    const response = await $fetch(`${config.public.apiBase}/scan/orgs/${selectedOrg.value}`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    })
+    const response = await startScan()
     syncJobState(response)
   } catch (err) {
     isScanning.value = false

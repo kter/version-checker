@@ -21,6 +21,10 @@ class UserModel(Base):
     username = Column(String, nullable=False)
     email = Column(String, nullable=True)
     role = Column(String, default="member")
+    github_access_token = Column(String, nullable=True)
+    github_refresh_token = Column(String, nullable=True)
+    github_access_token_expires_at = Column(DateTime, nullable=True)
+    github_refresh_token_expires_at = Column(DateTime, nullable=True)
 
     def to_domain(self) -> User:
         return User(
@@ -29,6 +33,10 @@ class UserModel(Base):
             username=self.username,
             email=self.email,
             role=self.role,
+            github_access_token=self.github_access_token,
+            github_refresh_token=self.github_refresh_token,
+            github_access_token_expires_at=self.github_access_token_expires_at,
+            github_refresh_token_expires_at=self.github_refresh_token_expires_at,
         )
 
 
@@ -40,6 +48,7 @@ class OrgModel(Base):
     name = Column(String, nullable=False)
     login = Column(String, nullable=False)
     github_access_token = Column(String, nullable=True)
+    token_owner_user_id = Column(String, nullable=True)
 
     def to_domain(self) -> Organization:
         return Organization(
@@ -48,6 +57,7 @@ class OrgModel(Base):
             name=self.name,
             login=self.login,
             github_access_token=self.github_access_token,
+            token_owner_user_id=self.token_owner_user_id,
         )
 
 

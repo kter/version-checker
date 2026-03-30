@@ -107,38 +107,38 @@ class TestAuthEndpoints:
         ) as mock_user_repo_cls, patch(
             "app.api.routes.auth.OrgRepository"
         ) as mock_org_repo_cls, patch(
-            "app.api.routes.auth.httpx.AsyncClient"
-        ) as mock_async_client_cls:
+            "app.api.routes.auth.GitHubTokenService"
+        ) as mock_token_service_cls:
             mock_settings.github_client_id = "test-client-id"
             mock_settings.github_client_secret = "test-secret"
             mock_settings.github_redirect_uri = (
                 "https://version-check.dev.devtools.site/auth/callback"
             )
 
-            mock_http_client = AsyncMock()
-            mock_http_client.post.return_value = MagicMock(
-                json=MagicMock(return_value={"access_token": "gho_test"}),
-                status_code=200,
+            mock_token_service = MagicMock()
+            mock_token_service.exchange_code_for_tokens = AsyncMock(
+                return_value=type(
+                    "TokenPayload",
+                    (),
+                    {
+                        "access_token": "gho_test",
+                        "refresh_token": "ghr_test",
+                        "access_token_expires_at": None,
+                        "refresh_token_expires_at": None,
+                    },
+                )()
             )
-            mock_http_client.get.side_effect = [
-                MagicMock(
-                    json=MagicMock(
-                        return_value={
-                            "id": 123,
-                            "login": "octocat",
-                            "email": "octocat@example.com",
-                        }
-                    )
-                ),
-                MagicMock(
-                    json=MagicMock(
-                        return_value=[{"id": 456, "login": "acme", "name": "Acme"}]
-                    )
-                ),
-            ]
-            mock_async_client_cls.return_value.__aenter__.return_value = (
-                mock_http_client
+            mock_token_service.fetch_github_user = AsyncMock(
+                return_value={
+                    "id": 123,
+                    "login": "octocat",
+                    "email": "octocat@example.com",
+                }
             )
+            mock_token_service.fetch_user_orgs = AsyncMock(
+                return_value=[{"id": 456, "login": "acme", "name": "Acme"}]
+            )
+            mock_token_service_cls.return_value = mock_token_service
 
             saved_user = User(
                 id="u1", github_id=123, username="octocat", email="octocat@example.com"

@@ -36,6 +36,7 @@
     "auth_code_already_used": "This authentication response was already used. Please start login again.",
     "auth_generic_failure": "Authentication failed.",
     "auth_load_failed": "Failed to authenticate.",
+    "auth_relogin_required": "Your GitHub authorization expired. Please sign in again.",
     "back_to_dashboard": "Back to Dashboard",
     "default_user": "User",
     "organization": "Account / Organization",

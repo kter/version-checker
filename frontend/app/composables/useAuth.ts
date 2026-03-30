@@ -24,6 +24,7 @@ export const useAuth = () => {
   const token = useState<string | null>('auth.token', () => null)
   const username = useState<string>('auth.username', () => '')
   const organizations = useState<AuthOrganization[]>('auth.organizations', () => [])
+  const authError = useState<string>('auth.error', () => '')
 
   const syncFromStorage = () => {
     if (!import.meta.client) {
@@ -65,13 +66,26 @@ export const useAuth = () => {
 
   const isAuthenticated = computed(() => Boolean(token.value && username.value))
 
+  const setAuthError = (message: string) => {
+    authError.value = message
+  }
+
+  const consumeAuthError = () => {
+    const message = authError.value
+    authError.value = ''
+    return message
+  }
+
   return {
     token,
     username,
     organizations,
+    authError,
     isAuthenticated,
     syncFromStorage,
     setAuth,
     clearAuth,
+    setAuthError,
+    consumeAuthError,
   }
 }
