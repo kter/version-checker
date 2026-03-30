@@ -3,6 +3,11 @@ import { defineComponent, nextTick } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import App from '../../app/app.vue'
 import { useAuth } from '../../app/composables/useAuth'
+import { useMonthlyTokenUsage } from '../../app/composables/useMonthlyTokenUsage'
+
+const API_BASE = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
+
+const apiUrl = (path: string) => `${API_BASE}${path}`
 
 const storage = new Map<string, string>()
 
@@ -37,10 +42,24 @@ const AppHarness = defineComponent({
   template: '<App />',
 })
 
+const AppStateResetHarness = defineComponent({
+  setup() {
+    const auth = useAuth()
+    const monthlyUsage = useMonthlyTokenUsage()
+
+    auth.clearAuth()
+    monthlyUsage.clear()
+
+    return () => null
+  },
+})
+
 describe('App', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorageMock.clear()
     fetchMock.mockReset()
+    const wrapper = await mountSuspended(AppStateResetHarness)
+    wrapper.unmount()
     fetchMock.mockResolvedValue({
       total_tokens: 3456,
     })
@@ -63,7 +82,7 @@ describe('App', () => {
     expect(wrapper.text()).toContain('alice')
     expect(wrapper.text()).not.toContain('Login with GitHub')
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/api/v1/usage/current-month',
+      apiUrl('/usage/current-month'),
       { headers: { Authorization: 'Bearer token-1' } }
     )
     expect(wrapper.text()).toContain('This month: 3,456 tokens')
@@ -80,7 +99,7 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('octocat')
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/api/v1/usage/current-month',
+      apiUrl('/usage/current-month'),
       { headers: { Authorization: 'Bearer token-2' } }
     )
     expect(localStorage.getItem('auth_orgs')).toBe(

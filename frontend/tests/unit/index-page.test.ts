@@ -4,6 +4,10 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import IndexPage from '../../app/pages/index.vue'
 import { useAuth } from '../../app/composables/useAuth'
 
+const API_BASE = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
+
+const apiUrl = (path: string) => `${API_BASE}${path}`
+
 const storage = new Map<string, string>()
 
 const localStorageMock = {
@@ -68,7 +72,7 @@ describe('Index page', () => {
     const wrapper = await mountSuspended(IndexHarness)
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/api/v1/scan/orgs/octocat',
+      apiUrl('/scan/orgs/octocat'),
       { headers: { Authorization: 'Bearer token-1' } }
     )
     expect(wrapper.text()).toContain('1 repositories found')
@@ -83,11 +87,11 @@ describe('Index page', () => {
       if (url === '/_nuxt/builds/meta/test.json') {
         return Promise.resolve({})
       }
-      if (url === 'http://localhost:8000/api/v1/scan/orgs/octocat/selection' && options?.method === 'PUT') {
+      if (url === apiUrl('/scan/orgs/octocat/selection') && options?.method === 'PUT') {
         selectionSaved = true
         return Promise.resolve({ selected_repository_count: 0 })
       }
-      if (url === 'http://localhost:8000/api/v1/scan/orgs/octocat') {
+      if (url === apiUrl('/scan/orgs/octocat')) {
         return Promise.resolve({
           repository_count: 1,
           selected_repository_count: selectionSaved ? 0 : 1,
@@ -117,7 +121,7 @@ describe('Index page', () => {
     await wrapper.vm.$nextTick()
 
     expect(fetchMock.mock.calls).toContainEqual([
-      'http://localhost:8000/api/v1/scan/orgs/octocat/selection',
+      apiUrl('/scan/orgs/octocat/selection'),
       {
         method: 'PUT',
         body: { selected_repo_ids: [] },
@@ -186,7 +190,7 @@ describe('Index page', () => {
       if (url === '/_nuxt/builds/meta/test.json') {
         return Promise.resolve({})
       }
-      if (url === 'http://localhost:8000/api/v1/scan/orgs/octocat' && options?.method === 'POST') {
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
         return Promise.resolve({
           job_id: 'job-1',
           org_id: 'octocat',
@@ -201,7 +205,7 @@ describe('Index page', () => {
           updated_at: '2026-03-28T12:00:00'
         })
       }
-      if (url === 'http://localhost:8000/api/v1/scan/orgs/octocat/jobs/job-1') {
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
         return Promise.resolve({
           job_id: 'job-1',
           org_id: 'octocat',
@@ -216,7 +220,7 @@ describe('Index page', () => {
           updated_at: '2026-03-28T12:00:10'
         })
       }
-      if (url === 'http://localhost:8000/api/v1/scan/orgs/octocat') {
+      if (url === apiUrl('/scan/orgs/octocat')) {
         refreshCount += 1
         return Promise.resolve({
           repository_count: 1,
@@ -257,7 +261,7 @@ describe('Index page', () => {
     await vi.runAllTicks()
 
     expect(fetchMock.mock.calls).toContainEqual([
-      'http://localhost:8000/api/v1/scan/orgs/octocat',
+      apiUrl('/scan/orgs/octocat'),
       {
         method: 'POST',
         headers: { Authorization: 'Bearer token-1' }
@@ -267,10 +271,10 @@ describe('Index page', () => {
     await vi.advanceTimersByTimeAsync(3000)
 
     expect(fetchMock.mock.calls).toContainEqual([
-      'http://localhost:8000/api/v1/scan/orgs/octocat/jobs/job-1',
+      apiUrl('/scan/orgs/octocat/jobs/job-1'),
       { headers: { Authorization: 'Bearer token-1' } }
     ])
-    expect(fetchMock.mock.calls.filter(([url]) => url === 'http://localhost:8000/api/v1/scan/orgs/octocat').length).toBeGreaterThanOrEqual(2)
+    expect(fetchMock.mock.calls.filter(([url]) => url === apiUrl('/scan/orgs/octocat')).length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('Nuxt')
   })
 
