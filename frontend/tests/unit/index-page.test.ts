@@ -76,6 +76,7 @@ describe('Index page', () => {
       { headers: { Authorization: 'Bearer token-1' } }
     )
     expect(wrapper.text()).toContain('1 repositories found')
+    expect(wrapper.text()).toContain('1 shown')
     expect(wrapper.text()).toContain('1 selected')
     const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
     expect(scanButton?.attributes('disabled')).toBeUndefined()
@@ -181,6 +182,105 @@ describe('Index page', () => {
     expect(wrapper.text()).toContain('0 selected')
     expect(wrapper.text()).toContain('Selection changes not saved')
     expect(wrapper.findAll('input[type="checkbox"]').every(input => !input.element.checked)).toBe(true)
+  })
+
+  it('filters repositories by search query', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 2,
+      repositories: [
+        baseRepository,
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/api',
+          framework: 'FastAPI',
+          version: '0.110.0',
+          source_path: 'backend/pyproject.toml',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+          is_selected: false,
+          framework: 'Nuxt',
+          version: '3.16.0',
+          source_path: 'frontend/package.json',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const searchInput = wrapper.find('input[type="search"]')
+
+    await searchInput.setValue('api')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 shown')
+    expect(wrapper.text()).toContain('octocat/api')
+    expect(wrapper.text()).not.toContain('octocat/app')
+    expect(wrapper.text()).not.toContain('octocat/docs')
+  })
+
+  it('filters repositories by monitoring and scan status', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 2,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/web',
+          framework: 'Nuxt',
+          version: '3.16.0',
+          is_eol: false,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/legacy',
+          is_selected: false,
+          framework: 'Rails',
+          version: '6.1',
+          is_eol: true,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/worker',
+          framework: null,
+          version: null,
+          is_eol: null,
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const [monitoringSelect, statusSelect] = wrapper.findAll('select')
+
+    await monitoringSelect.setValue('disabled')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 shown')
+    expect(wrapper.text()).toContain('octocat/legacy')
+    expect(wrapper.text()).not.toContain('octocat/web')
+    expect(wrapper.text()).not.toContain('octocat/worker')
+
+    await statusSelect.setValue('pending')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('No matching repositories')
+
+    const clearFiltersButton = wrapper.findAll('button').find(button => button.text().includes('Clear Filters'))
+    await clearFiltersButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('3 shown')
+    expect(wrapper.text()).toContain('octocat/web')
+    expect(wrapper.text()).toContain('octocat/legacy')
+    expect(wrapper.text()).toContain('octocat/worker')
   })
 
   it('starts a scan job and polls until completion', async () => {

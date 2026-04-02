@@ -28,9 +28,58 @@
             {{ $t('repositories_found', { count: repositoryCount }) }}
           </p>
           <p class="text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-100/50 dark:bg-gray-800/50 px-3 py-1.5 rounded-lg">
+            {{ $t('repositories_shown', { count: filteredRepositoryCount }) }}
+          </p>
+          <p class="text-sm font-medium text-gray-500 dark:text-gray-400 bg-gray-100/50 dark:bg-gray-800/50 px-3 py-1.5 rounded-lg">
             {{ $t('selected_repositories', { count: selectedRepositoryCount }) }}
           </p>
         </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-end">
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">{{ $t('filter_search_label') }}</span>
+          <input
+            v-model="searchQuery"
+            type="search"
+            class="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-950/70 dark:text-white dark:focus:border-indigo-500 dark:focus:ring-indigo-950"
+            :placeholder="$t('filter_search_placeholder')"
+          >
+        </label>
+
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">{{ $t('filter_monitoring_label') }}</span>
+          <select
+            v-model="monitoringFilter"
+            class="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-950/70 dark:text-white dark:focus:border-indigo-500 dark:focus:ring-indigo-950"
+          >
+            <option v-for="option in monitoringFilterOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">{{ $t('filter_status_label') }}</span>
+          <select
+            v-model="repositoryStatusFilter"
+            class="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-950/70 dark:text-white dark:focus:border-indigo-500 dark:focus:ring-indigo-950"
+          >
+            <option v-for="option in repositoryStatusFilterOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <UButton
+          color="gray"
+          variant="ghost"
+          size="lg"
+          class="justify-center"
+          :disabled="!hasActiveFilters"
+          @click="resetFilters"
+          :label="$t('clear_filters')"
+        />
       </div>
 
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -100,9 +149,9 @@
       <span class="font-medium">{{ error }}</span>
     </div>
 
-    <div v-if="repositories.length > 0" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+    <div v-if="filteredRepositories.length > 0" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
       <div
-        v-for="repo in repositories"
+        v-for="repo in filteredRepositories"
         :key="repo.repository_id"
         class="group relative bg-white/60 dark:bg-gray-900/60 backdrop-blur-md rounded-2xl p-6 border border-white/20 dark:border-white/5 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden"
       >
@@ -174,6 +223,14 @@
       </div>
     </div>
 
+    <div v-else-if="repositories.length > 0 && !isLoading" class="bg-white/50 dark:bg-gray-900/50 backdrop-blur-md rounded-3xl border border-white/20 dark:border-white/5 py-24 text-center shadow-sm">
+      <div class="w-20 h-20 bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-900 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-inner">
+        <span class="text-4xl">🔎</span>
+      </div>
+      <h3 class="text-xl font-bold text-gray-900 dark:text-white mb-2 font-['Outfit']">{{ $t('no_filtered_repositories') }}</h3>
+      <p class="text-gray-500 dark:text-gray-400 max-w-md mx-auto">{{ $t('no_filtered_repositories_desc') }}</p>
+    </div>
+
     <div v-else-if="!isLoading" class="bg-white/50 dark:bg-gray-900/50 backdrop-blur-md rounded-3xl border border-white/20 dark:border-white/5 py-24 text-center shadow-sm">
       <div class="w-20 h-20 bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-900 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-inner">
         <span class="text-4xl">📦</span>
@@ -203,12 +260,36 @@ const repositoryCount = ref(0)
 const activeJob = ref(null)
 const pollingHandle = ref(null)
 const savedSelectedRepoIds = ref([])
+const searchQuery = ref('')
+const monitoringFilter = ref('all')
+const repositoryStatusFilter = ref('all')
 
 const userOrgs = computed(() => organizations.value)
 const selectedOrg = ref('')
 
 const ACTIVE_SCAN_JOB_STATUSES = new Set(['queued', 'running'])
 const TERMINAL_SCAN_JOB_STATUSES = new Set(['completed', 'partial_failed', 'failed'])
+
+const monitoringFilterOptions = computed(() => [
+  { value: 'all', label: t('filter_all') },
+  { value: 'enabled', label: t('filter_monitoring_enabled') },
+  { value: 'disabled', label: t('filter_monitoring_disabled') }
+])
+
+const repositoryStatusFilterOptions = computed(() => [
+  { value: 'all', label: t('filter_all') },
+  { value: 'supported', label: t('filter_status_supported') },
+  { value: 'eol', label: t('filter_status_eol') },
+  { value: 'pending', label: t('filter_status_pending') }
+])
+
+const normalizedSearchQuery = computed(() => searchQuery.value.trim().toLowerCase())
+
+const filteredRepositories = computed(() => {
+  return repositories.value.filter((repo) => {
+    return matchesSearchQuery(repo) && matchesMonitoringFilter(repo) && matchesRepositoryStatusFilter(repo)
+  })
+})
 
 const selectedRepositoryIds = computed(() => {
   return repositories.value
@@ -218,10 +299,18 @@ const selectedRepositoryIds = computed(() => {
 })
 
 const selectedRepositoryCount = computed(() => selectedRepositoryIds.value.length)
+const filteredRepositoryCount = computed(() => filteredRepositories.value.length)
 const allRepositoriesSelected = computed(() => {
   return repositories.value.length > 0 && selectedRepositoryCount.value === repositories.value.length
 })
 const noRepositoriesSelected = computed(() => selectedRepositoryCount.value === 0)
+const hasActiveFilters = computed(() => {
+  return Boolean(
+    normalizedSearchQuery.value ||
+    monitoringFilter.value !== 'all' ||
+    repositoryStatusFilter.value !== 'all'
+  )
+})
 
 const hasPendingSelectionChanges = computed(() => {
   return JSON.stringify(selectedRepositoryIds.value) !== JSON.stringify([...savedSelectedRepoIds.value].sort())
@@ -367,6 +456,48 @@ function setAllRepositorySelections(isSelected) {
     ...repo,
     is_selected: isSelected
   }))
+}
+
+function resetFilters() {
+  searchQuery.value = ''
+  monitoringFilter.value = 'all'
+  repositoryStatusFilter.value = 'all'
+}
+
+function getRepositoryStatus(repo) {
+  if (!repo.framework) {
+    return 'pending'
+  }
+  return repo.is_eol ? 'eol' : 'supported'
+}
+
+function matchesSearchQuery(repo) {
+  if (!normalizedSearchQuery.value) {
+    return true
+  }
+
+  const fields = [repo.repo_id, repo.framework, repo.version, repo.source_path]
+    .filter(Boolean)
+    .map(value => String(value).toLowerCase())
+
+  return fields.some(value => value.includes(normalizedSearchQuery.value))
+}
+
+function matchesMonitoringFilter(repo) {
+  if (monitoringFilter.value === 'all') {
+    return true
+  }
+  if (monitoringFilter.value === 'enabled') {
+    return repo.is_selected
+  }
+  return !repo.is_selected
+}
+
+function matchesRepositoryStatusFilter(repo) {
+  if (repositoryStatusFilter.value === 'all') {
+    return true
+  }
+  return getRepositoryStatus(repo) === repositoryStatusFilter.value
 }
 
 async function loadScanJob(jobId) {
