@@ -500,16 +500,24 @@ def serialize_scan_job(job: Optional[ScanJob]) -> Optional[Dict[str, Any]]:
         "total_repos": job.total_repos,
         "completed_repos": job.completed_repos,
         "failed_repos": job.failed_repos,
-        "started_at": job.started_at.isoformat() if job.started_at else None,
-        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "started_at": _serialize_utc_datetime(job.started_at),
+        "finished_at": _serialize_utc_datetime(job.finished_at),
         "error_message": job.error_message,
-        "created_at": job.created_at.isoformat(),
-        "updated_at": job.updated_at.isoformat(),
+        "created_at": _serialize_utc_datetime(job.created_at),
+        "updated_at": _serialize_utc_datetime(job.updated_at),
     }
 
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _serialize_utc_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def _is_scan_job_stale(job: ScanJob, now: Optional[datetime] = None) -> bool:
@@ -579,9 +587,7 @@ def _serialize_detection_item(status: Any) -> Dict[str, Any]:
         "version": status.current_version,
         "is_eol": status.is_eol,
         "eol_date": status.eol_date.isoformat() if status.eol_date else None,
-        "last_scanned_at": (
-            status.last_scanned_at.isoformat() if status.last_scanned_at else None
-        ),
+        "last_scanned_at": _serialize_utc_datetime(status.last_scanned_at),
         "source_path": status.source_path,
     }
 
@@ -606,8 +612,8 @@ def _serialize_repository(repo, statuses) -> Dict[str, Any]:
             if primary_status and primary_status.eol_date
             else None
         ),
-        "last_scanned_at": (
-            primary_status.last_scanned_at.isoformat() if primary_status else None
+        "last_scanned_at": _serialize_utc_datetime(
+            primary_status.last_scanned_at if primary_status else None
         ),
         "source_path": primary_status.source_path if primary_status else None,
     }

@@ -1,6 +1,6 @@
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
-from datetime import datetime
 
 import pytest
 
@@ -20,6 +20,7 @@ from app.usecases.scan_jobs import (
     SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE,
     ScanJobService,
     ScanJobWorkerService,
+    serialize_scan_job,
 )
 
 
@@ -134,7 +135,7 @@ class TestScanJobService:
                 "version": "18.0.0",
                 "is_eol": True,
                 "eol_date": "2025-04-30T00:00:00",
-                "last_scanned_at": "2026-03-28T12:00:00",
+                "last_scanned_at": "2026-03-28T12:00:00+00:00",
                 "source_path": "frontend/package.json",
             },
             {
@@ -142,7 +143,7 @@ class TestScanJobService:
                 "version": "3.16.0",
                 "is_eol": False,
                 "eol_date": None,
-                "last_scanned_at": "2026-03-29T12:00:00",
+                "last_scanned_at": "2026-03-29T12:00:00+00:00",
                 "source_path": "frontend/package.json",
             },
         ]
@@ -239,6 +240,34 @@ class TestScanJobService:
 
         assert result == active_job
         queue.send_message.assert_not_awaited()
+
+    def test_serialize_scan_job_uses_explicit_utc_offsets(self):
+        serialized = serialize_scan_job(
+            ScanJob(
+                id="job-1",
+                org_id="octocat",
+                requested_by="octocat",
+                status="running",
+                created_at=datetime(2026, 4, 3, 9, 0, 0),
+                updated_at=datetime(2026, 4, 3, 9, 5, 0, tzinfo=UTC),
+                started_at=datetime(2026, 4, 3, 9, 1, 0),
+                finished_at=datetime(2026, 4, 3, 9, 6, 0),
+            )
+        )
+
+        assert serialized == {
+            "job_id": "job-1",
+            "org_id": "octocat",
+            "status": "running",
+            "total_repos": 0,
+            "completed_repos": 0,
+            "failed_repos": 0,
+            "started_at": "2026-04-03T09:01:00+00:00",
+            "finished_at": "2026-04-03T09:06:00+00:00",
+            "error_message": None,
+            "created_at": "2026-04-03T09:00:00+00:00",
+            "updated_at": "2026-04-03T09:05:00+00:00",
+        }
 
     @pytest.mark.asyncio
     async def test_enqueue_scan_replaces_stale_active_job(self, monkeypatch):
