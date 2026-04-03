@@ -70,6 +70,125 @@ class TestFrameworkEolScanner:
 
         assert release["name"] == "3.5"
 
+    def test_extract_dockerfile_runtime_and_explicit_debian_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:3.12-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        assert ("Python", "3.12", "backend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Debian", "bookworm", "backend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_dockerfile_skips_implicit_debian_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:3.12-slim
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        extracted = [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Python", "3.12", "backend/Dockerfile") in extracted
+        assert ("Debian", "bookworm", "backend/Dockerfile") not in extracted
+        assert not any(name == "Debian" for name, _, _ in extracted)
+
+    def test_extract_dockerfile_runtime_and_explicit_alpine_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM node:20-alpine3.20
+        """
+
+        results = scanner._extract_dependencies("frontend/Dockerfile", content)
+
+        assert ("Node.js", "20", "frontend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Alpine Linux", "3.20", "frontend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_direct_os_image_dependency(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM debian:12-slim
+        FROM ubuntu:24.04
+        """
+
+        results = scanner._extract_dependencies("Dockerfile.release", content)
+
+        assert ("Debian", "12", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Ubuntu", "24.04", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_dockerfile_resolves_arg_defaults_and_multistage(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        ARG PYTHON_VERSION=3.12
+        FROM --platform=$BUILDPLATFORM python:${PYTHON_VERSION}-bookworm AS builder
+        FROM node:20-alpine3.20 AS frontend
+        FROM python:${PYTHON_VERSION}-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        extracted = [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert extracted.count(("Python", "3.12", "backend/Dockerfile")) == 2
+        assert extracted.count(("Debian", "bookworm", "backend/Dockerfile")) == 2
+        assert ("Node.js", "20", "backend/Dockerfile") in extracted
+        assert ("Alpine Linux", "3.20", "backend/Dockerfile") in extracted
+
+    def test_extract_dockerfile_skips_unresolved_arg_reference(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:${PYTHON_VERSION}-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        assert results == []
+
+    def test_match_release_supports_codename(self):
+        scanner = FrameworkEolScanner()
+        releases = [
+            {
+                "name": "12",
+                "codename": "bookworm",
+                "releaseDate": "2023-06-10",
+                "isEol": False,
+            },
+            {
+                "name": "11",
+                "codename": "bullseye",
+                "releaseDate": "2021-08-14",
+                "isEol": False,
+            },
+        ]
+
+        release = scanner._match_release(releases, "bookworm")
+
+        assert release["name"] == "12"
+
 
 class TestScanRepositoryUseCase:
     @pytest.mark.asyncio

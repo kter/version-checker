@@ -382,6 +382,56 @@ describe('Index page', () => {
     expect(pageText).toContain('FastAPI')
   })
 
+
+  it('renders docker-derived EOL items in the repository summary and details', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [{
+        ...baseRepository,
+        framework: 'Debian',
+        version: 'bookworm',
+        is_eol: true,
+        eol_date: '2026-06-10T00:00:00',
+        last_scanned_at: '2026-03-30T12:00:00',
+        source_path: 'backend/Dockerfile',
+        detected_item_count: 2,
+        detected_items: [
+          buildDetectedItem({
+            name: 'Debian',
+            version: 'bookworm',
+            is_eol: true,
+            eol_date: '2026-06-10T00:00:00',
+            last_scanned_at: '2026-03-30T12:00:00',
+            source_path: 'backend/Dockerfile',
+          }),
+          buildDetectedItem({
+            name: 'Python',
+            version: '3.12',
+            last_scanned_at: '2026-03-29T12:00:00',
+            source_path: 'backend/Dockerfile',
+          })
+        ]
+      }],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    expect(wrapper.text()).toContain('Debian')
+    expect(wrapper.text()).toContain('bookworm')
+    expect(wrapper.text()).toContain('backend/Dockerfile')
+
+    await wrapper.find('[data-testid="repository-card-repo-1"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const pageText = document.body.textContent || ''
+    expect(pageText).toContain('2 detected items')
+    expect(pageText).toContain('Debian')
+    expect(pageText).toContain('Python')
+    expect(pageText).toContain('backend/Dockerfile')
+  })
+
   it('does not open repository details modal when toggling repository checkboxes', async () => {
     const wrapper = await mountSuspended(IndexHarness)
 

@@ -145,6 +145,69 @@ class TestScanJobService:
             },
         ]
 
+
+    @pytest.mark.asyncio
+    async def test_get_scan_results_allows_docker_items_to_drive_summary(self):
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_latest_by_org.return_value = None
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            )
+        ]
+        scanner_usecase.get_saved_results.return_value = [
+            EolStatus(
+                repo_id="repo-1",
+                framework_name="Python",
+                current_version="3.12",
+                is_eol=False,
+                last_scanned_at=datetime(2026, 3, 29, 12, 0, 0),
+                source_path="backend/Dockerfile",
+            ),
+            EolStatus(
+                repo_id="repo-1",
+                framework_name="Debian",
+                current_version="bookworm",
+                is_eol=True,
+                eol_date=datetime(2026, 6, 10, 0, 0, 0),
+                last_scanned_at=datetime(2026, 3, 30, 12, 0, 0),
+                source_path="backend/Dockerfile",
+            ),
+        ]
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.get_scan_results("octocat", "gho_test", "octocat")
+
+        repository = result["repositories"][0]
+        assert repository["framework"] == "Debian"
+        assert repository["version"] == "bookworm"
+        assert repository["is_eol"] is True
+        assert repository["source_path"] == "backend/Dockerfile"
+        assert repository["detected_items"][0]["name"] == "Debian"
+        assert repository["detected_items"][0]["source_path"] == "backend/Dockerfile"
+
     @pytest.mark.asyncio
     async def test_enqueue_scan_reuses_active_job(self):
         active_job = ScanJob(

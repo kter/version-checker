@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import re
+import shlex
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -99,6 +100,63 @@ CANDIDATE_MANIFESTS = {
     "build.gradle.kts",
 }
 
+DOCKER_RUNTIME_IMAGES = {
+    "node": RUNTIME_PRODUCTS["node"],
+    "python": RUNTIME_PRODUCTS["python"],
+    "php": RUNTIME_PRODUCTS["php"],
+    "ruby": RUNTIME_PRODUCTS["ruby"],
+    "go": RUNTIME_PRODUCTS["go"],
+    "golang": RUNTIME_PRODUCTS["go"],
+}
+
+DOCKER_OS_PRODUCTS = {
+    "alpine": SupportedDependency("alpine", "alpine-linux", "Alpine Linux"),
+    "debian": SupportedDependency("debian", "debian", "Debian"),
+    "ubuntu": SupportedDependency("ubuntu", "ubuntu", "Ubuntu"),
+}
+
+DEBIAN_CODENAMES = {
+    "bookworm",
+    "bullseye",
+    "buster",
+    "stretch",
+    "jessie",
+    "wheezy",
+    "squeeze",
+    "lenny",
+    "etch",
+    "trixie",
+    "forky",
+    "sid",
+}
+
+UBUNTU_CODENAMES = {
+    "noble",
+    "jammy",
+    "focal",
+    "bionic",
+    "xenial",
+    "mantic",
+    "lunar",
+    "kinetic",
+    "impish",
+    "hirsute",
+    "groovy",
+    "focal",
+    "eoan",
+    "disco",
+    "cosmic",
+    "bionic",
+    "artful",
+    "zesty",
+    "yakkety",
+    "xenial",
+}
+
+DOCKER_VARIABLE_PATTERN = re.compile(
+    r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
+)
+
 
 def _extract_version(spec: str) -> Optional[str]:
     match = re.search(r"(\d+(?:\.\d+){0,3})", spec)
@@ -119,6 +177,117 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
 
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _is_candidate_manifest_path(path: str) -> bool:
+    filename = path.split("/")[-1]
+    return filename in CANDIDATE_MANIFESTS or filename.startswith("Dockerfile")
+
+
+def _normalize_cycle_text(value: Optional[str]) -> str:
+    return str(value or "").strip().lower()
+
+
+def _dockerfile_lines(content: str) -> List[str]:
+    logical_lines: List[str] = []
+    buffer: List[str] = []
+
+    for raw_line in content.splitlines():
+        stripped = raw_line.strip()
+        if not buffer and (not stripped or stripped.startswith("#")):
+            continue
+
+        continued = raw_line.rstrip().endswith("\\")
+        line = raw_line.rstrip()
+        if continued:
+            line = line[:-1]
+        buffer.append(line.strip())
+
+        if continued:
+            continue
+
+        logical_line = " ".join(part for part in buffer if part)
+        if logical_line and not logical_line.startswith("#"):
+            logical_lines.append(logical_line)
+        buffer = []
+
+    if buffer:
+        logical_line = " ".join(part for part in buffer if part)
+        if logical_line and not logical_line.startswith("#"):
+            logical_lines.append(logical_line)
+
+    return logical_lines
+
+
+def _substitute_docker_args(value: str, defaults: Dict[str, str]) -> Optional[str]:
+    def replace(match: re.Match[str]) -> str:
+        key = match.group("braced") or match.group("plain") or ""
+        return defaults.get(key, match.group(0))
+
+    substituted = DOCKER_VARIABLE_PATTERN.sub(replace, value)
+    if "$" in substituted:
+        return None
+    return substituted
+
+
+def _split_docker_image_reference(image_reference: str) -> tuple[str, Optional[str]]:
+    without_digest = image_reference.split("@", 1)[0]
+    image_name = without_digest.rsplit("/", 1)[-1]
+    if ":" in image_name:
+        name, tag = image_name.rsplit(":", 1)
+        return name.lower(), tag
+    return image_name.lower(), None
+
+
+def _extract_direct_os_cycle(tag: Optional[str], codenames: set[str]) -> Optional[str]:
+    if not tag:
+        return None
+
+    primary_token = _normalize_cycle_text(tag).split("-", 1)[0]
+    version = _extract_version(primary_token)
+    if version:
+        return version
+    if primary_token in codenames:
+        return primary_token
+    return None
+
+
+def _extract_debian_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
+    if not tag:
+        return None
+    for token in re.split(r"[-_.]", _normalize_cycle_text(tag)):
+        if token in DEBIAN_CODENAMES:
+            return token
+    return None
+
+
+def _extract_ubuntu_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
+    if not tag:
+        return None
+    for token in re.split(r"[-_.]", _normalize_cycle_text(tag)):
+        if token in UBUNTU_CODENAMES:
+            return token
+    return None
+
+
+def _extract_alpine_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
+    if not tag:
+        return None
+
+    alpine_match = re.search(
+        r"(?:^|[-_.])alpine(?P<version>\d+(?:\.\d+)*)",
+        _normalize_cycle_text(tag),
+    )
+    if not alpine_match:
+        return None
+    return alpine_match.group("version")
+
+
+def _extract_direct_alpine_cycle(tag: Optional[str]) -> Optional[str]:
+    if not tag:
+        return None
+    primary_token = _normalize_cycle_text(tag).split("-", 1)[0]
+    return _extract_version(primary_token)
 
 
 class GitHubClient:
@@ -228,7 +397,7 @@ class GitHubClient:
             if item.get("type") != "blob":
                 continue
             path = item.get("path", "")
-            if path.split("/")[-1] in CANDIDATE_MANIFESTS:
+            if _is_candidate_manifest_path(path):
                 paths.append(path)
         return sorted(paths)
 
@@ -483,10 +652,151 @@ class FrameworkEolScanner:
                                 path,
                             )
                         )
+            elif filename.startswith("Dockerfile"):
+                matches.extend(self._extract_docker_dependencies(path, content))
         except (ET.ParseError, json.JSONDecodeError, tomllib.TOMLDecodeError):
             return []
 
         return matches
+
+    def _extract_docker_dependencies(
+        self, path: str, content: str
+    ) -> List[tuple[SupportedDependency, str, str]]:
+        matches: List[tuple[SupportedDependency, str, str]] = []
+        arg_defaults: Dict[str, str] = {}
+
+        for line in _dockerfile_lines(content):
+            upper_line = line.upper()
+            if upper_line.startswith("ARG "):
+                name, value = self._parse_arg_instruction(line)
+                if name and value is not None:
+                    resolved_value = _substitute_docker_args(value, arg_defaults)
+                    if resolved_value is not None:
+                        arg_defaults[name] = resolved_value
+                continue
+
+            if not upper_line.startswith("FROM "):
+                continue
+
+            image_reference = self._parse_from_instruction(line, arg_defaults)
+            if not image_reference:
+                continue
+
+            matches.extend(
+                self._extract_docker_image_dependencies(path, image_reference)
+            )
+
+        return matches
+
+    def _parse_arg_instruction(self, line: str) -> tuple[Optional[str], Optional[str]]:
+        try:
+            tokens = shlex.split(line, comments=False)
+        except ValueError:
+            return None, None
+
+        if len(tokens) < 2 or tokens[0].upper() != "ARG":
+            return None, None
+
+        declaration = tokens[1]
+        if "=" not in declaration:
+            return declaration, None
+
+        name, value = declaration.split("=", 1)
+        return name, value
+
+    def _parse_from_instruction(
+        self,
+        line: str,
+        arg_defaults: Dict[str, str],
+    ) -> Optional[str]:
+        try:
+            tokens = shlex.split(line, comments=False)
+        except ValueError:
+            return None
+
+        if len(tokens) < 2 or tokens[0].upper() != "FROM":
+            return None
+
+        image_reference: Optional[str] = None
+        for token in tokens[1:]:
+            if token.startswith("--"):
+                continue
+            if token.upper() == "AS":
+                break
+            image_reference = token
+            break
+
+        if not image_reference:
+            return None
+
+        return _substitute_docker_args(image_reference, arg_defaults)
+
+    def _extract_docker_image_dependencies(
+        self,
+        path: str,
+        image_reference: str,
+    ) -> List[tuple[SupportedDependency, str, str]]:
+        matches: List[tuple[SupportedDependency, str, str]] = []
+        image_name, tag = _split_docker_image_reference(image_reference)
+
+        runtime_dependency = DOCKER_RUNTIME_IMAGES.get(image_name)
+        if runtime_dependency and tag:
+            runtime_version = _extract_version(tag)
+            if runtime_version:
+                matches.append((runtime_dependency, runtime_version, path))
+
+            if image_name in {"node", "python", "php", "ruby", "go", "golang"}:
+                os_dependency = self._extract_runtime_base_os_dependency(path, tag)
+                if os_dependency:
+                    matches.append(os_dependency)
+
+        direct_os_dependency = self._extract_direct_os_dependency(path, image_name, tag)
+        if direct_os_dependency:
+            matches.append(direct_os_dependency)
+
+        return matches
+
+    def _extract_runtime_base_os_dependency(
+        self,
+        path: str,
+        tag: str,
+    ) -> Optional[tuple[SupportedDependency, str, str]]:
+        alpine_cycle = _extract_alpine_cycle_from_tag(tag)
+        if alpine_cycle:
+            return (DOCKER_OS_PRODUCTS["alpine"], alpine_cycle, path)
+
+        debian_cycle = _extract_debian_cycle_from_tag(tag)
+        if debian_cycle:
+            return (DOCKER_OS_PRODUCTS["debian"], debian_cycle, path)
+
+        ubuntu_cycle = _extract_ubuntu_cycle_from_tag(tag)
+        if ubuntu_cycle:
+            return (DOCKER_OS_PRODUCTS["ubuntu"], ubuntu_cycle, path)
+
+        return None
+
+    def _extract_direct_os_dependency(
+        self,
+        path: str,
+        image_name: str,
+        tag: Optional[str],
+    ) -> Optional[tuple[SupportedDependency, str, str]]:
+        if image_name == "alpine":
+            cycle = _extract_direct_alpine_cycle(tag)
+            if cycle:
+                return (DOCKER_OS_PRODUCTS["alpine"], cycle, path)
+
+        if image_name == "debian":
+            cycle = _extract_direct_os_cycle(tag, DEBIAN_CODENAMES)
+            if cycle:
+                return (DOCKER_OS_PRODUCTS["debian"], cycle, path)
+
+        if image_name == "ubuntu":
+            cycle = _extract_direct_os_cycle(tag, UBUNTU_CODENAMES)
+            if cycle:
+                return (DOCKER_OS_PRODUCTS["ubuntu"], cycle, path)
+
+        return None
 
     async def _build_eol_status(
         self,
@@ -515,6 +825,25 @@ class FrameworkEolScanner:
     def _match_release(
         self, releases: List[Dict[str, Any]], current_version: str
     ) -> Optional[Dict[str, Any]]:
+        normalized_current = _normalize_cycle_text(current_version)
+        exact_candidates = [
+            release
+            for release in releases
+            if normalized_current
+            and normalized_current
+            in {
+                _normalize_cycle_text(release.get("name")),
+                _normalize_cycle_text(release.get("codename")),
+            }
+        ]
+        if exact_candidates:
+            exact_candidates.sort(
+                key=lambda release: _parse_date(release.get("releaseDate"))
+                or datetime.min,
+                reverse=True,
+            )
+            return exact_candidates[0]
+
         current_parts = _version_parts(current_version)
         if not current_parts:
             return None
