@@ -59,6 +59,10 @@ const getRenderedRepositoryNames = (wrapper: Awaited<ReturnType<typeof mountSusp
   return wrapper.findAll('[data-testid="repository-name"]').map(node => node.text())
 }
 
+const getMonitoringCheckboxes = (wrapper: Awaited<ReturnType<typeof mountSuspended>>) => {
+  return wrapper.findAll('[data-testid^="repository-checkbox-"]')
+}
+
 describe('Index page', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -191,7 +195,7 @@ describe('Index page', () => {
 
     expect(wrapper.text()).toContain('2 selected')
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(wrapper.findAll('input[type="checkbox"]').every(input => input.element.checked)).toBe(true)
+    expect(getMonitoringCheckboxes(wrapper).every(input => input.element.checked)).toBe(true)
   })
 
   it('clears all repositories with one action', async () => {
@@ -217,7 +221,48 @@ describe('Index page', () => {
 
     expect(wrapper.text()).toContain('0 selected')
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(wrapper.findAll('input[type="checkbox"]').every(input => !input.element.checked)).toBe(true)
+    expect(getMonitoringCheckboxes(wrapper).every(input => !input.element.checked)).toBe(true)
+  })
+
+  it('disables monitoring for marked repositories in one action', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 3,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/app',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/api',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="bulk-selection-checkbox-repo-1"]').setValue(true)
+    await wrapper.find('[data-testid="bulk-selection-checkbox-repo-3"]').setValue(true)
+    await wrapper.vm.$nextTick()
+
+    const disableMonitoringButton = wrapper.findAll('button').find(button => button.text().includes('Disable Monitoring'))
+    await disableMonitoringButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 selected')
+    expect(wrapper.text()).toContain('Selection changes not saved')
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-1"]').element.checked).toBe(false)
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-2"]').element.checked).toBe(true)
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-3"]').element.checked).toBe(false)
   })
 
   it('filters repositories by search query', async () => {

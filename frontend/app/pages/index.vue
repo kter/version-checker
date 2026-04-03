@@ -103,8 +103,35 @@
           <p class="text-xs text-gray-500 dark:text-gray-400">
             {{ $t('selection_help') }}
           </p>
+          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
+            {{ $t('bulk_marked_repositories', { count: markedRepositoryCount }) }}
+          </p>
         </div>
         <div class="flex flex-wrap gap-3 w-full sm:w-auto">
+          <UButton
+            color="gray"
+            variant="ghost"
+            size="lg"
+            :disabled="!canMarkFilteredRepositories"
+            @click="markFilteredRepositories"
+            :label="$t('mark_filtered_repositories')"
+          />
+          <UButton
+            color="gray"
+            variant="ghost"
+            size="lg"
+            :disabled="!canClearMarkedRepositories"
+            @click="clearMarkedRepositories"
+            :label="$t('clear_marked_repositories')"
+          />
+          <UButton
+            color="gray"
+            variant="ghost"
+            size="lg"
+            :disabled="!canDisableMarkedRepositories"
+            @click="setMonitoringForMarkedRepositories(false)"
+            :label="$t('disable_monitoring_for_marked')"
+          />
           <UButton
             color="gray"
             variant="ghost"
@@ -172,6 +199,7 @@
         v-for="repo in filteredRepositories"
         :key="repo.repository_id"
         class="group relative bg-white/60 dark:bg-gray-900/60 backdrop-blur-md rounded-2xl p-6 border border-white/20 dark:border-white/5 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden"
+        :class="isMarkedRepository(repo.repository_id) ? 'ring-2 ring-indigo-400/70 dark:ring-indigo-500/70' : ''"
       >
         <div
           class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r"
@@ -180,6 +208,16 @@
 
         <div class="flex justify-between items-start gap-4 mb-4">
           <div class="min-w-0 flex-1">
+            <label class="inline-flex items-center gap-2 mb-3 cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400">
+              <input
+                type="checkbox"
+                :data-testid="`bulk-selection-checkbox-${repo.repository_id}`"
+                class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                :checked="isMarkedRepository(repo.repository_id)"
+                @change="toggleMarkedRepository(repo.repository_id)"
+              >
+              <span>{{ $t('bulk_selection_checkbox_label') }}</span>
+            </label>
             <label class="inline-flex items-center gap-3 cursor-pointer">
               <input
                 type="checkbox"
@@ -279,6 +317,7 @@ const repositoryCount = ref(0)
 const activeJob = ref(null)
 const pollingHandle = ref(null)
 const savedSelectedRepoIds = ref([])
+const markedRepositoryIds = ref([])
 const searchQuery = ref('')
 const monitoringFilter = ref('all')
 const repositoryStatusFilter = ref('all')
@@ -330,11 +369,17 @@ const selectedRepositoryIds = computed(() => {
 })
 
 const selectedRepositoryCount = computed(() => selectedRepositoryIds.value.length)
+const markedRepositoryCount = computed(() => markedRepositoryIds.value.length)
 const filteredRepositoryCount = computed(() => filteredRepositories.value.length)
+const filteredRepositoryIds = computed(() => filteredRepositories.value.map(repo => repo.repository_id))
 const allRepositoriesSelected = computed(() => {
   return repositories.value.length > 0 && selectedRepositoryCount.value === repositories.value.length
 })
 const noRepositoriesSelected = computed(() => selectedRepositoryCount.value === 0)
+const allFilteredRepositoriesMarked = computed(() => {
+  return filteredRepositoryIds.value.length > 0
+    && filteredRepositoryIds.value.every(repositoryId => markedRepositoryIds.value.includes(repositoryId))
+})
 const hasActiveFilters = computed(() => {
   return Boolean(
     normalizedSearchQuery.value ||
@@ -373,6 +418,22 @@ const canBulkClearAll = computed(() => {
     !isScanJobActive.value &&
     !noRepositoriesSelected.value
   )
+})
+
+const canMarkFilteredRepositories = computed(() => {
+  return Boolean(
+    selectedOrg.value &&
+    filteredRepositoryIds.value.length > 0 &&
+    !allFilteredRepositoriesMarked.value
+  )
+})
+
+const canClearMarkedRepositories = computed(() => markedRepositoryCount.value > 0)
+
+const canDisableMarkedRepositories = computed(() => {
+  return markedRepositoryIds.value.some((repositoryId) => {
+    return repositories.value.some(repo => repo.repository_id === repositoryId && repo.is_selected)
+  })
 })
 
 const canScan = computed(() => {
@@ -473,6 +534,9 @@ function applyRepositoryResponse(response) {
   savedSelectedRepoIds.value = repositories.value
     .filter(repo => repo.is_selected)
     .map(repo => repo.repository_id)
+  markedRepositoryIds.value = markedRepositoryIds.value.filter(repositoryId => {
+    return repositories.value.some(repo => repo.repository_id === repositoryId)
+  })
 }
 
 function toggleRepositorySelection(repositoryId) {
@@ -492,6 +556,41 @@ function setAllRepositorySelections(isSelected) {
     ...repo,
     is_selected: isSelected
   }))
+}
+
+function isMarkedRepository(repositoryId) {
+  return markedRepositoryIds.value.includes(repositoryId)
+}
+
+function toggleMarkedRepository(repositoryId) {
+  if (isMarkedRepository(repositoryId)) {
+    markedRepositoryIds.value = markedRepositoryIds.value.filter(id => id !== repositoryId)
+    return
+  }
+  markedRepositoryIds.value = [...markedRepositoryIds.value, repositoryId]
+}
+
+function markFilteredRepositories() {
+  markedRepositoryIds.value = Array.from(new Set([
+    ...markedRepositoryIds.value,
+    ...filteredRepositoryIds.value
+  ]))
+}
+
+function clearMarkedRepositories() {
+  markedRepositoryIds.value = []
+}
+
+function setMonitoringForMarkedRepositories(isSelected) {
+  repositories.value = repositories.value.map((repo) => {
+    if (!markedRepositoryIds.value.includes(repo.repository_id)) {
+      return repo
+    }
+    return {
+      ...repo,
+      is_selected: isSelected
+    }
+  })
 }
 
 function resetFilters() {
