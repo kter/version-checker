@@ -51,6 +51,7 @@ async def _process_record(record: Dict[str, Any]) -> None:
         except Exception:
             await session.rollback()
             logger.exception("Failed to process scan queue message")
+            raise
 
 
 def lambda_handler(event, context):

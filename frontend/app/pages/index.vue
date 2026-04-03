@@ -391,7 +391,11 @@
 const { organizations, syncFromStorage, consumeAuthError } = useAuth()
 const { authedFetch } = useAuthedFetch()
 const { t } = useI18n()
-const STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled before repository progress started.'
+const BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled before repository progress started.'
+const PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled while processing repositories.'
+const SCAN_JOB_QUEUE_STALE_AFTER_MS = 5 * 60 * 1000
+const SCAN_JOB_BOOTSTRAP_STALE_AFTER_MS = 3 * 60 * 1000
+const SCAN_JOB_PROGRESS_STALE_AFTER_MS = 15 * 60 * 1000
 
 const isScanning = ref(false)
 const isSavingSelection = ref(false)
@@ -547,7 +551,7 @@ const scanJobDetailLabel = computed(() => {
   if (!activeJob.value) {
     return ''
   }
-  if (activeJob.value.status === 'queued' || (activeJob.value.total_repos ?? 0) === 0) {
+  if (activeJob.value.status === 'queued' || activeJob.value.total_repos === 0) {
     return t('scan_preparing')
   }
   return t('scan_progress', {
@@ -623,14 +627,87 @@ function stopPolling() {
   pollingJobId.value = ''
 }
 
+function normalizeJobCount(value) {
+  const normalizedCount = Number(value)
+  return Number.isFinite(normalizedCount) ? normalizedCount : 0
+}
+
+function normalizeJob(job) {
+  if (!job) {
+    return null
+  }
+  return {
+    ...job,
+    status: String(job.status || '').toLowerCase(),
+    total_repos: normalizeJobCount(job.total_repos),
+    completed_repos: normalizeJobCount(job.completed_repos),
+    failed_repos: normalizeJobCount(job.failed_repos),
+  }
+}
+
+function getScanJobReferenceTimestamp(job) {
+  return parseSortableTimestamp(job?.updated_at)
+    ?? parseSortableTimestamp(job?.started_at)
+    ?? parseSortableTimestamp(job?.created_at)
+}
+
+function isScanJobStale(job) {
+  if (!job || !ACTIVE_SCAN_JOB_STATUSES.has(job.status)) {
+    return false
+  }
+
+  const referenceTimestamp = getScanJobReferenceTimestamp(job)
+  if (referenceTimestamp === null) {
+    return false
+  }
+
+  const ageInMilliseconds = Date.now() - referenceTimestamp
+  if (job.status === 'queued') {
+    return ageInMilliseconds >= SCAN_JOB_QUEUE_STALE_AFTER_MS
+  }
+  if (job.status === 'running' && job.total_repos === 0) {
+    return ageInMilliseconds >= SCAN_JOB_BOOTSTRAP_STALE_AFTER_MS
+  }
+  if (job.status === 'running' && job.completed_repos + job.failed_repos < job.total_repos) {
+    return ageInMilliseconds >= SCAN_JOB_PROGRESS_STALE_AFTER_MS
+  }
+  return false
+}
+
+function finalizeStaleJob(job) {
+  const finalizedAt = new Date().toISOString()
+  const stalledErrorMessage = job.status === 'queued' || job.total_repos === 0
+    ? BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE
+    : PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE
+  return {
+    ...job,
+    status: 'failed',
+    error_message: job.error_message || stalledErrorMessage,
+    finished_at: job.finished_at || finalizedAt,
+    updated_at: finalizedAt,
+  }
+}
+
 function syncJobState(job) {
-  activeJob.value = job || null
-  isScanning.value = Boolean(job && ACTIVE_SCAN_JOB_STATUSES.has(job.status))
-  if (job && ACTIVE_SCAN_JOB_STATUSES.has(job.status)) {
-    startPolling(job.job_id)
-    return
+  const normalizedJob = normalizeJob(job)
+  const effectiveJob = isScanJobStale(normalizedJob)
+    ? finalizeStaleJob(normalizedJob)
+    : normalizedJob
+
+  activeJob.value = effectiveJob
+  isScanning.value = Boolean(effectiveJob && ACTIVE_SCAN_JOB_STATUSES.has(effectiveJob.status))
+  if (effectiveJob && ACTIVE_SCAN_JOB_STATUSES.has(effectiveJob.status)) {
+    startPolling(effectiveJob.job_id)
+    return effectiveJob
+  }
+  if (
+    effectiveJob?.error_message === BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE
+    || effectiveJob?.error_message === PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE
+  ) {
+    error.value = getScanJobErrorMessage(effectiveJob)
   }
   stopPolling()
+  return effectiveJob
 }
 
 function startPolling(jobId) {
@@ -646,8 +723,11 @@ function startPolling(jobId) {
 }
 
 function getScanJobErrorMessage(job) {
-  if (job?.error_message === STALLED_SCAN_JOB_ERROR_MESSAGE) {
+  if (job?.error_message === BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE) {
     return t('scan_stalled_message')
+  }
+  if (job?.error_message === PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE) {
+    return t('scan_progress_stalled_message')
   }
   return job?.error_message || t('scan_failed_message')
 }
@@ -984,11 +1064,11 @@ async function pollJobStatus(jobId) {
   if (!selectedOrg.value) return
   try {
     const response = await loadScanJob(jobId)
-    syncJobState(response)
-    if (TERMINAL_SCAN_JOB_STATUSES.has(response.status)) {
+    const effectiveJob = syncJobState(response)
+    if (effectiveJob && TERMINAL_SCAN_JOB_STATUSES.has(effectiveJob.status)) {
       isScanning.value = false
-      const terminalError = response.status === 'partial_failed' || response.status === 'failed'
-        ? getScanJobErrorMessage(response)
+      const terminalError = effectiveJob.status === 'partial_failed' || effectiveJob.status === 'failed'
+        ? getScanJobErrorMessage(effectiveJob)
         : ''
       await loadData({ preserveExisting: true, clearError: !terminalError })
       if (terminalError) {

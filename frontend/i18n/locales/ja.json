@@ -83,5 +83,6 @@
     "scan_progress": "{total} 件中 {completed} 件を処理済み",
     "scan_failed_message": "リポジトリのスキャンに失敗しました。",
     "scan_stalled_message": "スキャン開始前に処理が停止しました。もう一度実行してください。",
+    "scan_progress_stalled_message": "リポジトリ処理中にスキャンが停止しました。もう一度実行してください。",
     "selection_save_failed_message": "リポジトリの選択保存に失敗しました。"
 }

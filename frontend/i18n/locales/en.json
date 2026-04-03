@@ -83,5 +83,6 @@
     "scan_progress": "{completed}/{total} repositories processed",
     "scan_failed_message": "Failed to run repository scan.",
     "scan_stalled_message": "The scan stalled before repository progress started. Please run it again.",
+    "scan_progress_stalled_message": "The scan stalled while processing repositories. Please run it again.",
     "selection_save_failed_message": "Failed to save repository selection."
 }

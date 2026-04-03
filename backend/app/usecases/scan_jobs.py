@@ -31,9 +31,15 @@ logger = logging.getLogger(__name__)
 
 SCAN_JOB_MESSAGE_BOOTSTRAP = "bootstrap_job"
 SCAN_JOB_MESSAGE_REPOSITORY = "scan_repository"
-SCAN_JOB_STALLED_ERROR_MESSAGE = "Scan job stalled before repository progress started."
+SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE = (
+    "Scan job stalled before repository progress started."
+)
+SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE = (
+    "Scan job stalled while processing repositories."
+)
 SCAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=5)
 SCAN_JOB_BOOTSTRAP_STALE_AFTER = timedelta(minutes=3)
+SCAN_JOB_PROGRESS_STALE_AFTER = timedelta(minutes=15)
 
 
 class ScanJobService:
@@ -227,7 +233,7 @@ class ScanJobService:
         return await self.scan_job_repository.finalize(
             job.id,
             SCAN_JOB_STATUS_FAILED,
-            SCAN_JOB_STALLED_ERROR_MESSAGE,
+            _get_scan_job_stalled_error_message(job),
         )
 
 
@@ -509,7 +515,20 @@ def _is_scan_job_stale(job: ScanJob, now: Optional[datetime] = None) -> bool:
     if job.status == "running" and job.total_repos == 0:
         return current_time - reference_time >= SCAN_JOB_BOOTSTRAP_STALE_AFTER
 
+    if (
+        job.status == "running"
+        and job.total_repos > 0
+        and job.completed_repos + job.failed_repos < job.total_repos
+    ):
+        return current_time - reference_time >= SCAN_JOB_PROGRESS_STALE_AFTER
+
     return False
+
+
+def _get_scan_job_stalled_error_message(job: ScanJob) -> str:
+    if job.status == "queued" or job.total_repos == 0:
+        return SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE
+    return SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE
 
 
 def _build_failure_summary(job: ScanJob) -> str:

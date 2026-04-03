@@ -382,7 +382,6 @@ describe('Index page', () => {
     expect(pageText).toContain('FastAPI')
   })
 
-
   it('renders docker-derived EOL items in the repository summary and details', async () => {
     fetchMock.mockResolvedValue({
       repository_count: 1,
@@ -589,6 +588,7 @@ describe('Index page', () => {
 
   it('starts a scan job and polls until completion', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
     let refreshCount = 0
     fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
       if (url === '/_nuxt/builds/meta/test.json') {
@@ -682,6 +682,7 @@ describe('Index page', () => {
 
   it('shows preparing copy instead of 0/0 progress while the scan job is bootstrapping', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
     fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
       if (url === '/_nuxt/builds/meta/test.json') {
         return Promise.resolve({})
@@ -743,6 +744,94 @@ describe('Index page', () => {
     expect(wrapper.text()).toContain('Preparing repository scan...')
     expect(wrapper.text()).not.toContain('0/0 repositories processed')
     expect(wrapper.text()).not.toContain('running')
+  })
+
+  it('treats string job counts as numbers when rendering bootstrap progress', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [baseRepository],
+      latest_job: {
+        job_id: 'job-1',
+        org_id: 'octocat',
+        status: 'running',
+        total_repos: '0',
+        completed_repos: '0',
+        failed_repos: '0',
+        started_at: '2026-03-28T12:00:01',
+        finished_at: null,
+        error_message: null,
+        created_at: '2026-03-28T12:00:00',
+        updated_at: '2026-03-28T12:00:01'
+      },
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    expect(wrapper.text()).toContain('Preparing repository scan...')
+    expect(wrapper.text()).not.toContain('0/0 repositories processed')
+  })
+
+  it('unlocks the UI when a stale bootstrap job is restored after reload', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:06:00'))
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [baseRepository],
+      latest_job: {
+        job_id: 'job-1',
+        org_id: 'octocat',
+        status: 'running',
+        total_repos: 0,
+        completed_repos: 0,
+        failed_repos: 0,
+        started_at: '2026-03-28T12:00:01',
+        finished_at: null,
+        error_message: null,
+        created_at: '2026-03-28T12:00:00',
+        updated_at: '2026-03-28T12:00:01'
+      },
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    expect(wrapper.text()).toContain('The scan stalled before repository progress started. Please run it again.')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('unlocks the UI when repository processing progress is stale after reload', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:20:00'))
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [baseRepository],
+      latest_job: {
+        job_id: 'job-1',
+        org_id: 'octocat',
+        status: 'running',
+        total_repos: 1,
+        completed_repos: 0,
+        failed_repos: 0,
+        started_at: '2026-03-28T12:00:01',
+        finished_at: null,
+        error_message: null,
+        created_at: '2026-03-28T12:00:00',
+        updated_at: '2026-03-28T12:00:01'
+      },
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    expect(wrapper.text()).toContain('The scan stalled while processing repositories. Please run it again.')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
   })
 
   it('stops polling and unlocks scanning when a stalled scan job fails', async () => {

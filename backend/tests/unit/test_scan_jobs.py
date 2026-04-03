@@ -13,9 +13,10 @@ from app.domain.entities import (
     ScanJob,
 )
 from app.usecases.scan_jobs import (
+    SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
     SCAN_JOB_MESSAGE_BOOTSTRAP,
     SCAN_JOB_MESSAGE_REPOSITORY,
-    SCAN_JOB_STALLED_ERROR_MESSAGE,
+    SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE,
     ScanJobService,
     ScanJobWorkerService,
 )
@@ -144,7 +145,6 @@ class TestScanJobService:
                 "source_path": "frontend/package.json",
             },
         ]
-
 
     @pytest.mark.asyncio
     async def test_get_scan_results_allows_docker_items_to_drive_summary(self):
@@ -276,7 +276,7 @@ class TestScanJobService:
             org_id="octocat",
             requested_by="octocat",
             status=SCAN_JOB_STATUS_FAILED,
-            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            error_message=SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
             created_at=stale_job.created_at,
             updated_at=now,
             finished_at=now,
@@ -313,7 +313,7 @@ class TestScanJobService:
         scan_job_repository.finalize.assert_awaited_once_with(
             "job-stale",
             SCAN_JOB_STATUS_FAILED,
-            SCAN_JOB_STALLED_ERROR_MESSAGE,
+            SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
         )
         scan_job_repository.create.assert_awaited_once()
         queue.send_message.assert_awaited_once()
@@ -515,7 +515,7 @@ class TestScanJobService:
             org_id="octocat",
             requested_by="octocat",
             status=SCAN_JOB_STATUS_FAILED,
-            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            error_message=SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
             created_at=stale_job.created_at,
             updated_at=now,
             finished_at=now,
@@ -540,10 +540,13 @@ class TestScanJobService:
         scan_job_repository.finalize.assert_awaited_once_with(
             "job-1",
             SCAN_JOB_STATUS_FAILED,
-            SCAN_JOB_STALLED_ERROR_MESSAGE,
+            SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
         )
         assert result["latest_job"]["status"] == SCAN_JOB_STATUS_FAILED
-        assert result["latest_job"]["error_message"] == SCAN_JOB_STALLED_ERROR_MESSAGE
+        assert (
+            result["latest_job"]["error_message"]
+            == SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE
+        )
 
     @pytest.mark.asyncio
     async def test_get_job_finalizes_stale_running_bootstrap_job(self, monkeypatch):
@@ -572,7 +575,7 @@ class TestScanJobService:
             requested_by="octocat",
             status=SCAN_JOB_STATUS_FAILED,
             total_repos=0,
-            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            error_message=SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
             created_at=stale_job.created_at,
             started_at=stale_job.started_at,
             updated_at=now,
@@ -594,10 +597,70 @@ class TestScanJobService:
         scan_job_repository.finalize.assert_awaited_once_with(
             "job-1",
             SCAN_JOB_STATUS_FAILED,
-            SCAN_JOB_STALLED_ERROR_MESSAGE,
+            SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
         )
         assert result.status == SCAN_JOB_STATUS_FAILED
-        assert result.error_message == SCAN_JOB_STALLED_ERROR_MESSAGE
+        assert result.error_message == SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_get_job_finalizes_stale_running_repository_progress_job(
+        self, monkeypatch
+    ):
+        now = datetime(2026, 4, 3, 11, 20, 0)
+        monkeypatch.setattr(scan_jobs_module, "_utcnow_naive", lambda: now)
+
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        stale_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=2,
+            completed_repos=0,
+            failed_repos=0,
+            created_at=datetime(2026, 4, 3, 10, 55, 0),
+            started_at=datetime(2026, 4, 3, 10, 56, 0),
+            updated_at=datetime(2026, 4, 3, 11, 0, 0),
+        )
+        scan_job_repository.find_by_id.return_value = stale_job
+        scan_job_repository.finalize.return_value = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status=SCAN_JOB_STATUS_FAILED,
+            total_repos=2,
+            completed_repos=0,
+            failed_repos=0,
+            error_message=SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE,
+            created_at=stale_job.created_at,
+            started_at=stale_job.started_at,
+            updated_at=now,
+            finished_at=now,
+        )
+        queue = AsyncMock()
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+        )
+
+        result = await service.get_job("octocat", "job-1")
+
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-1",
+            SCAN_JOB_STATUS_FAILED,
+            SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE,
+        )
+        assert result.status == SCAN_JOB_STATUS_FAILED
+        assert result.error_message == SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE
 
 
 class TestScanJobWorkerService:
