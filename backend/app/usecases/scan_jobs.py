@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -40,6 +41,7 @@ SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE = (
 SCAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=5)
 SCAN_JOB_BOOTSTRAP_STALE_AFTER = timedelta(minutes=3)
 SCAN_JOB_PROGRESS_STALE_AFTER = timedelta(minutes=15)
+SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS = 90
 
 
 class ScanJobService:
@@ -357,17 +359,25 @@ class ScanJobWorkerService:
 
         try:
             access_token = await self._get_organization_access_token(organization)
-            statuses = await self._scan_repository_with_retry(
-                organization,
-                repository,
-                access_token,
-            )
+            async with asyncio.timeout(SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS):
+                statuses = await self._scan_repository_with_retry(
+                    organization,
+                    repository,
+                    access_token,
+                )
             await self.eol_status_repository.replace_for_repo(repository.id, statuses)
             updated_job = await self.scan_job_repository.record_repo_success(job_id)
         except GitHubAuthorizationExpiredError:
             updated_job = await self.scan_job_repository.record_repo_failure(
                 job_id,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
+            )
+        except TimeoutError:
+            updated_job = await self.scan_job_repository.record_repo_failure(
+                job_id,
+                "Repository scan timed out for "
+                f"{repository.full_name} after "
+                f"{SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS} seconds",
             )
         except Exception as exc:
             logger.exception("Failed to scan repository %s", repository.full_name)

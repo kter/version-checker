@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 from datetime import datetime
 
@@ -929,6 +930,95 @@ class TestScanJobWorkerService:
             }
         )
 
+        scan_job_repository.finalize.assert_awaited_once()
+        finalize_args = scan_job_repository.finalize.await_args.args
+        assert finalize_args[0] == "job-1"
+        assert finalize_args[1] == SCAN_JOB_STATUS_FAILED
+
+    @pytest.mark.asyncio
+    async def test_repository_scan_records_timeout_as_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            scan_jobs_module,
+            "SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS",
+            0.01,
+        )
+        initial_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=0,
+        )
+        updated_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=1,
+            error_message=(
+                "Repository scan timed out for octocat/app after 0.01 seconds"
+            ),
+        )
+
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        repo_repository.find_by_id.return_value = Repository(
+            id="repo-1",
+            github_id=1,
+            name="app",
+            full_name="octocat/app",
+            org_id="octocat",
+            owner_login="octocat",
+            default_branch="main",
+        )
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.record_repo_failure.return_value = updated_job
+        queue = AsyncMock()
+        scanner = AsyncMock()
+
+        async def slow_scan_repo(*_args, **_kwargs):
+            await asyncio.sleep(0.05)
+            return []
+
+        scanner.scan_repo.side_effect = slow_scan_repo
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner=scanner,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                "job_id": "job-1",
+                "org_id": "octocat",
+                "repo_id": "repo-1",
+            }
+        )
+
+        scan_job_repository.record_repo_failure.assert_awaited_once_with(
+            "job-1",
+            "Repository scan timed out for octocat/app after 0.01 seconds",
+        )
         scan_job_repository.finalize.assert_awaited_once()
         finalize_args = scan_job_repository.finalize.await_args.args
         assert finalize_args[0] == "job-1"
