@@ -79,7 +79,9 @@
     "no_filtered_repositories_desc": "Adjust your filters to see repositories again.",
     "scan_queued": "Scan job queued",
     "scan_running": "Scan in progress",
+    "scan_preparing": "Preparing repository scan...",
     "scan_progress": "{completed}/{total} repositories processed",
     "scan_failed_message": "Failed to run repository scan.",
+    "scan_stalled_message": "The scan stalled before repository progress started. Please run it again.",
     "selection_save_failed_message": "Failed to save repository selection."
 }

@@ -176,16 +176,16 @@
       v-if="activeJob && isScanJobActive"
       class="bg-amber-50/80 dark:bg-amber-950/70 backdrop-blur-sm border border-amber-200 dark:border-amber-800/50 rounded-2xl p-5 text-amber-900 dark:text-amber-100 shadow-sm"
     >
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex flex-col gap-2">
         <div>
           <p class="text-sm font-semibold">{{ scanJobStatusLabel }}</p>
-          <p class="text-sm text-amber-800/80 dark:text-amber-200/80">
-            {{ $t('scan_progress', { completed: activeJob.completed_repos, total: activeJob.total_repos }) }}
+          <p
+            v-if="scanJobDetailLabel"
+            class="text-sm text-amber-800/80 dark:text-amber-200/80"
+          >
+            {{ scanJobDetailLabel }}
           </p>
         </div>
-        <p class="text-xs uppercase tracking-[0.18em] text-amber-700/70 dark:text-amber-300/70">
-          {{ activeJob.status }}
-        </p>
       </div>
     </div>
 
@@ -391,6 +391,7 @@
 const { organizations, syncFromStorage, consumeAuthError } = useAuth()
 const { authedFetch } = useAuthedFetch()
 const { t } = useI18n()
+const STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled before repository progress started.'
 
 const isScanning = ref(false)
 const isSavingSelection = ref(false)
@@ -400,6 +401,7 @@ const repositories = ref([])
 const repositoryCount = ref(0)
 const activeJob = ref(null)
 const pollingHandle = ref(null)
+const pollingJobId = ref('')
 const savedSelectedRepoIds = ref([])
 const markedRepositoryIds = ref([])
 const isRepositoryDetailsOpen = ref(false)
@@ -541,6 +543,19 @@ const scanJobStatusLabel = computed(() => {
   return t('scan_running')
 })
 
+const scanJobDetailLabel = computed(() => {
+  if (!activeJob.value) {
+    return ''
+  }
+  if (activeJob.value.status === 'queued' || (activeJob.value.total_repos ?? 0) === 0) {
+    return t('scan_preparing')
+  }
+  return t('scan_progress', {
+    completed: activeJob.value.completed_repos,
+    total: activeJob.value.total_repos
+  })
+})
+
 const selectedRepositoryDetails = computed(() => {
   return repositories.value.find(repo => repo.repository_id === activeRepositoryId.value) || null
 })
@@ -605,6 +620,7 @@ function stopPolling() {
     clearInterval(pollingHandle.value)
     pollingHandle.value = null
   }
+  pollingJobId.value = ''
 }
 
 function syncJobState(job) {
@@ -618,10 +634,22 @@ function syncJobState(job) {
 }
 
 function startPolling(jobId) {
+  if (pollingJobId.value && pollingJobId.value !== jobId) {
+    stopPolling()
+  }
+  pollingJobId.value = jobId
   if (pollingHandle.value) return
   pollingHandle.value = setInterval(() => {
     pollJobStatus(jobId)
   }, 3000)
+  void pollJobStatus(jobId)
+}
+
+function getScanJobErrorMessage(job) {
+  if (job?.error_message === STALLED_SCAN_JOB_ERROR_MESSAGE) {
+    return t('scan_stalled_message')
+  }
+  return job?.error_message || t('scan_failed_message')
 }
 
 function normalizeDetectedItem(item) {
@@ -960,7 +988,7 @@ async function pollJobStatus(jobId) {
     if (TERMINAL_SCAN_JOB_STATUSES.has(response.status)) {
       isScanning.value = false
       const terminalError = response.status === 'partial_failed' || response.status === 'failed'
-        ? (response.error_message || t('scan_failed_message'))
+        ? getScanJobErrorMessage(response)
         : ''
       await loadData({ preserveExisting: true, clearError: !terminalError })
       if (terminalError) {

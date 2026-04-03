@@ -3,6 +3,7 @@ from datetime import datetime
 
 import pytest
 
+import app.usecases.scan_jobs as scan_jobs_module
 from app.domain.entities import (
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
@@ -14,6 +15,7 @@ from app.domain.entities import (
 from app.usecases.scan_jobs import (
     SCAN_JOB_MESSAGE_BOOTSTRAP,
     SCAN_JOB_MESSAGE_REPOSITORY,
+    SCAN_JOB_STALLED_ERROR_MESSAGE,
     ScanJobService,
     ScanJobWorkerService,
 )
@@ -173,6 +175,85 @@ class TestScanJobService:
 
         assert result == active_job
         queue.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_scan_replaces_stale_active_job(self, monkeypatch):
+        now = datetime(2026, 4, 3, 11, 0, 0)
+        monkeypatch.setattr(scan_jobs_module, "_utcnow_naive", lambda: now)
+
+        stale_job = ScanJob(
+            id="job-stale",
+            org_id="octocat",
+            requested_by="octocat",
+            status="queued",
+            created_at=datetime(2026, 4, 3, 10, 50, 0),
+            updated_at=datetime(2026, 4, 3, 10, 50, 0),
+        )
+        refreshed_job = ScanJob(
+            id="job-2",
+            org_id="octocat",
+            requested_by="octocat",
+        )
+
+        org_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_active_by_org.return_value = stale_job
+        scan_job_repository.finalize.return_value = ScanJob(
+            id="job-stale",
+            org_id="octocat",
+            requested_by="octocat",
+            status=SCAN_JOB_STATUS_FAILED,
+            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            created_at=stale_job.created_at,
+            updated_at=now,
+            finished_at=now,
+        )
+        scan_job_repository.create.return_value = refreshed_job
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            )
+        ]
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.enqueue_scan("octocat", "octocat")
+
+        assert result == refreshed_job
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-stale",
+            SCAN_JOB_STATUS_FAILED,
+            SCAN_JOB_STALLED_ERROR_MESSAGE,
+        )
+        scan_job_repository.create.assert_awaited_once()
+        queue.send_message.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_enqueue_scan_creates_bootstrap_job(self):
@@ -346,6 +427,114 @@ class TestScanJobService:
             "octocat", ["repo-2"]
         )
         assert result == {"selected_repository_count": 1}
+
+    @pytest.mark.asyncio
+    async def test_get_scan_results_finalizes_stale_queued_job(self, monkeypatch):
+        now = datetime(2026, 4, 3, 11, 0, 0)
+        monkeypatch.setattr(scan_jobs_module, "_utcnow_naive", lambda: now)
+
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        stale_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="queued",
+            created_at=datetime(2026, 4, 3, 10, 50, 0),
+            updated_at=datetime(2026, 4, 3, 10, 50, 0),
+        )
+        scan_job_repository.find_latest_by_org.return_value = stale_job
+        scan_job_repository.finalize.return_value = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status=SCAN_JOB_STATUS_FAILED,
+            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            created_at=stale_job.created_at,
+            updated_at=now,
+            finished_at=now,
+        )
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = []
+        scanner_usecase.get_saved_results.return_value = []
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.get_scan_results("octocat", "gho_test", "octocat")
+
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-1",
+            SCAN_JOB_STATUS_FAILED,
+            SCAN_JOB_STALLED_ERROR_MESSAGE,
+        )
+        assert result["latest_job"]["status"] == SCAN_JOB_STATUS_FAILED
+        assert result["latest_job"]["error_message"] == SCAN_JOB_STALLED_ERROR_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_get_job_finalizes_stale_running_bootstrap_job(self, monkeypatch):
+        now = datetime(2026, 4, 3, 11, 0, 0)
+        monkeypatch.setattr(scan_jobs_module, "_utcnow_naive", lambda: now)
+
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        stale_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=0,
+            created_at=datetime(2026, 4, 3, 10, 55, 0),
+            started_at=datetime(2026, 4, 3, 10, 56, 0),
+            updated_at=datetime(2026, 4, 3, 10, 56, 0),
+        )
+        scan_job_repository.find_by_id.return_value = stale_job
+        scan_job_repository.finalize.return_value = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status=SCAN_JOB_STATUS_FAILED,
+            total_repos=0,
+            error_message=SCAN_JOB_STALLED_ERROR_MESSAGE,
+            created_at=stale_job.created_at,
+            started_at=stale_job.started_at,
+            updated_at=now,
+            finished_at=now,
+        )
+        queue = AsyncMock()
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+        )
+
+        result = await service.get_job("octocat", "job-1")
+
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-1",
+            SCAN_JOB_STATUS_FAILED,
+            SCAN_JOB_STALLED_ERROR_MESSAGE,
+        )
+        assert result.status == SCAN_JOB_STATUS_FAILED
+        assert result.error_message == SCAN_JOB_STALLED_ERROR_MESSAGE
 
 
 class TestScanJobWorkerService:

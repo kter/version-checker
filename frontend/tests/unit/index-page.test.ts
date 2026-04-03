@@ -613,6 +613,7 @@ describe('Index page', () => {
 
     await scanButton!.trigger('click')
     await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat'),
@@ -621,15 +622,153 @@ describe('Index page', () => {
         headers: { Authorization: 'Bearer token-1' }
       }
     ])
-
-    await vi.advanceTimersByTimeAsync(3000)
-
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat/jobs/job-1'),
       { headers: { Authorization: 'Bearer token-1' } }
     ])
     expect(fetchMock.mock.calls.filter(([url]) => url === apiUrl('/scan/orgs/octocat')).length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('Nuxt')
+  })
+
+  it('shows preparing copy instead of 0/0 progress while the scan job is bootstrapping', async () => {
+    vi.useFakeTimers()
+    fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/_nuxt/builds/meta/test.json') {
+        return Promise.resolve({})
+      }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat')) {
+        return Promise.resolve({
+          repository_count: 1,
+          selected_repository_count: 1,
+          repositories: [baseRepository],
+          latest_job: null,
+        })
+      }
+
+      return Promise.resolve({})
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    await scanButton!.trigger('click')
+    await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
+
+    expect(fetchMock.mock.calls).toContainEqual([
+      apiUrl('/scan/orgs/octocat/jobs/job-1'),
+      { headers: { Authorization: 'Bearer token-1' } }
+    ])
+    expect(wrapper.text()).toContain('Scan job queued')
+    expect(wrapper.text()).toContain('Preparing repository scan...')
+    expect(wrapper.text()).not.toContain('0/0 repositories processed')
+    expect(wrapper.text()).not.toContain('running')
+  })
+
+  it('stops polling and unlocks scanning when a stalled scan job fails', async () => {
+    vi.useFakeTimers()
+    let refreshCount = 0
+    fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/_nuxt/builds/meta/test.json') {
+        return Promise.resolve({})
+      }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'failed',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: '2026-03-28T12:00:01',
+          finished_at: '2026-03-28T12:03:10',
+          error_message: 'Scan job stalled before repository progress started.',
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:03:10'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat')) {
+        refreshCount += 1
+        return Promise.resolve({
+          repository_count: 1,
+          selected_repository_count: 1,
+          repositories: [baseRepository],
+          latest_job: refreshCount > 1 ? {
+            job_id: 'job-1',
+            org_id: 'octocat',
+            status: 'failed',
+            total_repos: 0,
+            completed_repos: 0,
+            failed_repos: 0,
+            started_at: '2026-03-28T12:00:01',
+            finished_at: '2026-03-28T12:03:10',
+            error_message: 'Scan job stalled before repository progress started.',
+            created_at: '2026-03-28T12:00:00',
+            updated_at: '2026-03-28T12:03:10'
+          } : null,
+        })
+      }
+
+      return Promise.resolve({})
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    await scanButton!.trigger('click')
+    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('The scan stalled before repository progress started. Please run it again.')
+    expect(wrapper.text()).not.toContain('Preparing repository scan...')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
   })
 
   it('disables scanning when no repositories are selected', async () => {

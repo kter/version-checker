@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 SCAN_JOB_MESSAGE_BOOTSTRAP = "bootstrap_job"
 SCAN_JOB_MESSAGE_REPOSITORY = "scan_repository"
+SCAN_JOB_STALLED_ERROR_MESSAGE = "Scan job stalled before repository progress started."
+SCAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=5)
+SCAN_JOB_BOOTSTRAP_STALE_AFTER = timedelta(minutes=3)
 
 
 class ScanJobService:
@@ -68,6 +71,7 @@ class ScanJobService:
         )
         statuses = await self.scanner_usecase.get_saved_results(org_id)
         latest_job = await self.scan_job_repository.find_latest_by_org(org_id)
+        latest_job = await self._finalize_stale_job_if_needed(latest_job)
         statuses_by_repo = _group_statuses_by_repo(
             statuses, {repo.id for repo in repos}
         )
@@ -85,7 +89,8 @@ class ScanJobService:
 
     async def enqueue_scan(self, org_id: str, requested_by: str) -> ScanJob:
         active_job = await self.scan_job_repository.find_active_by_org(org_id)
-        if active_job:
+        active_job = await self._finalize_stale_job_if_needed(active_job)
+        if active_job and active_job.status in ACTIVE_SCAN_JOB_STATUSES:
             return active_job
 
         organization = await self.org_repository.find_by_login(org_id)
@@ -127,7 +132,7 @@ class ScanJobService:
         job = await self.scan_job_repository.find_by_id(job_id)
         if not job or job.org_id != org_id:
             return None
-        return job
+        return await self._finalize_stale_job_if_needed(job)
 
     async def update_selection(
         self,
@@ -213,6 +218,17 @@ class ScanJobService:
             return organization.github_access_token
 
         raise GitHubAuthorizationExpiredError(GITHUB_REAUTH_REQUIRED_DETAIL)
+
+    async def _finalize_stale_job_if_needed(
+        self, job: Optional[ScanJob]
+    ) -> Optional[ScanJob]:
+        if not job or not _is_scan_job_stale(job):
+            return job
+        return await self.scan_job_repository.finalize(
+            job.id,
+            SCAN_JOB_STATUS_FAILED,
+            SCAN_JOB_STALLED_ERROR_MESSAGE,
+        )
 
 
 class ScanJobWorkerService:
@@ -474,6 +490,26 @@ def serialize_scan_job(job: Optional[ScanJob]) -> Optional[Dict[str, Any]]:
         "created_at": job.created_at.isoformat(),
         "updated_at": job.updated_at.isoformat(),
     }
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _is_scan_job_stale(job: ScanJob, now: Optional[datetime] = None) -> bool:
+    if job.status not in ACTIVE_SCAN_JOB_STATUSES:
+        return False
+
+    current_time = now or _utcnow_naive()
+    reference_time = job.updated_at or job.started_at or job.created_at
+
+    if job.status == "queued":
+        return current_time - reference_time >= SCAN_JOB_QUEUE_STALE_AFTER
+
+    if job.status == "running" and job.total_repos == 0:
+        return current_time - reference_time >= SCAN_JOB_BOOTSTRAP_STALE_AFTER
+
+    return False
 
 
 def _build_failure_summary(job: ScanJob) -> str:
