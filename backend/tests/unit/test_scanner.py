@@ -117,16 +117,6 @@ class TestScanRepositoryUseCase:
             owner_login="test-org",
             default_branch="main",
         )
-        saved_existing_repo = Repository(
-            id="repo-db-1",
-            github_id=101,
-            name="web",
-            full_name="test-org/web",
-            org_id="test-org",
-            owner_login="test-org",
-            default_branch="main",
-            is_selected=True,
-        )
         saved_new_repo = Repository(
             id="repo-db-2",
             github_id=102,
@@ -140,7 +130,7 @@ class TestScanRepositoryUseCase:
 
         repo_repository = AsyncMock()
         repo_repository.find_by_org.return_value = [existing_repo]
-        repo_repository.save.side_effect = [saved_existing_repo, saved_new_repo]
+        repo_repository.save.return_value = saved_new_repo
         status_repository = AsyncMock()
 
         usecase = ScanRepositoryUseCase(repo_repository, status_repository)
@@ -151,14 +141,12 @@ class TestScanRepositoryUseCase:
         ):
             results = await usecase.list_repositories("test-org", "gho_test", "octocat")
 
-        assert results == [saved_existing_repo, saved_new_repo]
+        assert results == [existing_repo, saved_new_repo]
         repo_repository.find_by_org.assert_awaited_once_with("test-org")
-        assert repo_repository.save.await_count == 2
-        first_saved_repo = repo_repository.save.await_args_list[0].args[0]
-        second_saved_repo = repo_repository.save.await_args_list[1].args[0]
-        assert first_saved_repo.id == "repo-db-1"
-        assert first_saved_repo.is_selected is True
-        assert second_saved_repo.is_selected is False
+        repo_repository.save.assert_awaited_once()
+        saved_repo = repo_repository.save.await_args.args[0]
+        assert saved_repo.github_id == 102
+        assert saved_repo.is_selected is False
 
     @pytest.mark.asyncio
     async def test_list_repositories_uses_personal_scope_for_authenticated_user(self):
@@ -252,8 +240,67 @@ class TestScanRepositoryUseCase:
         assert results == [existing_repo]
         repo_cache_repository.get_repositories.assert_awaited_once_with("test-org")
         repo_cache_repository.set_repositories.assert_not_awaited()
+        repo_repository.save.assert_not_awaited()
         mock_list_org_repositories.assert_not_awaited()
-        assert repo_repository.save.await_args.args[0].is_selected is True
+
+    @pytest.mark.asyncio
+    async def test_list_repositories_saves_cached_repo_when_metadata_changed(self):
+        existing_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=True,
+        )
+        cached_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="trunk",
+        )
+        updated_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="trunk",
+            is_selected=True,
+        )
+
+        repo_repository = AsyncMock()
+        repo_repository.find_by_org.return_value = [existing_repo]
+        repo_repository.save.return_value = updated_repo
+        status_repository = AsyncMock()
+        repo_cache_repository = AsyncMock()
+        repo_cache_repository.get_repositories.return_value = [cached_repo]
+
+        usecase = ScanRepositoryUseCase(
+            repo_repository,
+            status_repository,
+            repo_cache_repository=repo_cache_repository,
+        )
+
+        results = await usecase.list_repositories(
+            "test-org",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
+
+        assert results == [updated_repo]
+        repo_repository.save.assert_awaited_once()
+        saved_repo = repo_repository.save.await_args.args[0]
+        assert saved_repo.id == "repo-db-1"
+        assert saved_repo.default_branch == "trunk"
+        assert saved_repo.is_selected is True
 
     @pytest.mark.asyncio
     async def test_execute_scans_selected_repositories_and_persists_statuses(self):
@@ -325,7 +372,7 @@ class TestScanRepositoryUseCase:
             results = await usecase.execute("test-org", "gho_test", "octocat")
 
         assert results == [status]
-        assert repo_repository.save.await_count == 2
+        repo_repository.save.assert_not_awaited()
         scanner.scan_repo.assert_awaited_once_with(selected_repo, "gho_test")
         status_repository.replace_for_repo.assert_awaited_once_with(
             "repo-db-1", [status]

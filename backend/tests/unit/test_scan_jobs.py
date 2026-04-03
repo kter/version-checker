@@ -234,6 +234,12 @@ class TestScanJobService:
             }
         )
         assert created_jobs[0].requested_by == "octocat"
+        scanner_usecase.list_repositories.assert_awaited_once_with(
+            "octocat",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
 
     @pytest.mark.asyncio
     async def test_enqueue_scan_rejects_when_no_repository_is_selected(self):
@@ -330,6 +336,12 @@ class TestScanJobService:
             ["repo-2"],
         )
 
+        scanner_usecase.list_repositories.assert_awaited_once_with(
+            "octocat",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
         repo_repository.replace_selection.assert_awaited_once_with(
             "octocat", ["repo-2"]
         )
@@ -454,6 +466,12 @@ class TestScanJobWorkerService:
             }
         )
 
+        scanner_usecase.list_repositories.assert_awaited_once_with(
+            "octocat",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
         scan_job_repository.start.assert_awaited_once_with("job-1", 1)
         queue.send_messages.assert_awaited_once_with(
             [

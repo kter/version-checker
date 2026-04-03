@@ -141,6 +141,7 @@ class ScanJobService:
             org_id,
             github_access_token,
             user_login,
+            use_cache=True,
         )
         current_repo_ids = {repo.id for repo in repositories}
         unknown_repo_ids = sorted(set(normalized_selected_repo_ids) - current_repo_ids)
@@ -170,6 +171,7 @@ class ScanJobService:
                 org_id,
                 access_token,
                 user_login,
+                use_cache=True,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -182,6 +184,7 @@ class ScanJobService:
             org_id,
             refreshed_token,
             user_login,
+            use_cache=True,
         )
 
     async def _get_organization_access_token(
@@ -394,6 +397,7 @@ class ScanJobWorkerService:
                 org_id,
                 access_token,
                 user_login,
+                use_cache=True,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -406,6 +410,7 @@ class ScanJobWorkerService:
             org_id,
             refreshed_token,
             user_login,
+            use_cache=True,
         )
 
     async def _scan_repository_with_retry(

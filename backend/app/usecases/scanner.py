@@ -594,6 +594,9 @@ class ScanRepositoryUseCase:
             if existing:
                 repo.id = existing.id
                 repo.is_selected = existing.is_selected
+                if _repositories_match(existing, repo):
+                    persisted_repositories.append(existing)
+                    continue
             else:
                 repo.is_selected = False
             persisted_repositories.append(await self.repo_repository.save(repo))
@@ -628,3 +631,15 @@ class ScanRepositoryUseCase:
             *(scan_repository(repo) for repo in selected_repositories)
         )
         return [status for statuses in results for status in statuses]
+
+
+def _repositories_match(existing: Repository, candidate: Repository) -> bool:
+    return (
+        existing.github_id == candidate.github_id
+        and existing.name == candidate.name
+        and existing.full_name == candidate.full_name
+        and existing.org_id == candidate.org_id
+        and existing.owner_login == candidate.owner_login
+        and existing.default_branch == candidate.default_branch
+        and existing.is_selected == candidate.is_selected
+    )
