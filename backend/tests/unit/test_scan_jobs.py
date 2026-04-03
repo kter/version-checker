@@ -19,6 +19,50 @@ from app.usecases.scan_jobs import (
 
 class TestScanJobService:
     @pytest.mark.asyncio
+    async def test_get_scan_results_uses_cached_repository_listing(self):
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_latest_by_org.return_value = None
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            )
+        ]
+        scanner_usecase.get_saved_results.return_value = []
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.get_scan_results("octocat", "gho_test", "octocat")
+
+        assert result["repository_count"] == 1
+        scanner_usecase.list_repositories.assert_awaited_once_with(
+            "octocat",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
+
+    @pytest.mark.asyncio
     async def test_enqueue_scan_reuses_active_job(self):
         active_job = ScanJob(
             id="job-1",

@@ -60,7 +60,10 @@ class ScanJobService:
         self, org_id: str, github_access_token: str, user_login: str
     ) -> Dict[str, Any]:
         repos = await self.scanner_usecase.list_repositories(
-            org_id, github_access_token, user_login
+            org_id,
+            github_access_token,
+            user_login,
+            use_cache=True,
         )
         statuses = await self.scanner_usecase.get_saved_results(org_id)
         latest_job = await self.scan_job_repository.find_latest_by_org(org_id)

@@ -8,6 +8,7 @@ from app.adapters.database_repo import (
     ScanJobRepository,
     UserRepository,
 )
+from app.adapters.dynamo_repo import DynamoRepoListCacheRepository
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.usecases.scan_jobs import ScanJobService
 from app.usecases.scanner import ScanRepositoryUseCase
@@ -44,7 +45,12 @@ async def run_daily_scan():
         eol_status_repository = EolStatusRepository(session)
         scan_job_repository = ScanJobRepository(session)
         queue = SqsScanQueue()
-        scanner_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
+        repo_cache_repository = DynamoRepoListCacheRepository()
+        scanner_usecase = ScanRepositoryUseCase(
+            repo_repository,
+            eol_status_repository,
+            repo_cache_repository=repo_cache_repository,
+        )
         scan_job_service = ScanJobService(
             org_repository,
             user_repository,

@@ -66,6 +66,28 @@ class IRepoRepository(ABC):
         pass
 
 
+class IRepoListCacheRepository(ABC):
+    @abstractmethod
+    async def get_repositories(self, org_id: str) -> Optional[List[Repository]]:
+        pass
+
+    @abstractmethod
+    async def set_repositories(
+        self, org_id: str, repositories: List[Repository]
+    ) -> None:
+        pass
+
+
+class IEolCacheRepository(ABC):
+    @abstractmethod
+    async def get_eol_status(self, repo_id: str) -> List[EolStatus]:
+        pass
+
+    @abstractmethod
+    async def set_eol_status(self, status: EolStatus) -> None:
+        pass
+
+
 class IEolStatusRepository(ABC):
     """Persistent scan result repository."""
 

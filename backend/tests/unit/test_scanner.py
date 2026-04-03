@@ -204,6 +204,58 @@ class TestScanRepositoryUseCase:
         assert repo_repository.save.await_args.args[0].is_selected is False
 
     @pytest.mark.asyncio
+    async def test_list_repositories_uses_cache_when_requested(self):
+        existing_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=True,
+        )
+        cached_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+
+        repo_repository = AsyncMock()
+        repo_repository.find_by_org.return_value = [existing_repo]
+        repo_repository.save.return_value = existing_repo
+        status_repository = AsyncMock()
+        repo_cache_repository = AsyncMock()
+        repo_cache_repository.get_repositories.return_value = [cached_repo]
+
+        usecase = ScanRepositoryUseCase(
+            repo_repository,
+            status_repository,
+            repo_cache_repository=repo_cache_repository,
+        )
+
+        with patch(
+            "app.usecases.scanner.GitHubClient.list_org_repositories",
+            new=AsyncMock(),
+        ) as mock_list_org_repositories:
+            results = await usecase.list_repositories(
+                "test-org",
+                "gho_test",
+                "octocat",
+                use_cache=True,
+            )
+
+        assert results == [existing_repo]
+        repo_cache_repository.get_repositories.assert_awaited_once_with("test-org")
+        repo_cache_repository.set_repositories.assert_not_awaited()
+        mock_list_org_repositories.assert_not_awaited()
+        assert repo_repository.save.await_args.args[0].is_selected is True
+
+    @pytest.mark.asyncio
     async def test_execute_scans_selected_repositories_and_persists_statuses(self):
         selected_repo = Repository(
             id="repo-db-1",

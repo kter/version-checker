@@ -39,7 +39,10 @@ resource "aws_iam_role_policy" "backend_lambda" {
           "dynamodb:PutItem",
           "dynamodb:Query",
         ]
-        Resource = aws_dynamodb_table.cache.arn
+        Resource = [
+          aws_dynamodb_table.cache.arn,
+          aws_dynamodb_table.repo_cache.arn,
+        ]
       },
       {
         Effect = "Allow"
@@ -93,14 +96,16 @@ resource "aws_lambda_function" "backend" {
   # Environment variables
   environment {
     variables = {
-      ENV                  = var.env
-      DSQL_ENDPOINT        = aws_dsql_cluster.main.arn
-      DYNAMO_TABLE         = aws_dynamodb_table.cache.name
-      GITHUB_CLIENT_ID     = var.github_client_id
-      GITHUB_CLIENT_SECRET = var.github_client_secret
-      FRONTEND_BASE_URL    = local.frontend_base_url
-      CORS_ALLOW_ORIGINS   = join(",", local.cors_allow_origins)
-      SCAN_QUEUE_URL       = aws_sqs_queue.scan_jobs.url
+      ENV                    = var.env
+      DSQL_ENDPOINT          = aws_dsql_cluster.main.arn
+      DYNAMO_TABLE           = aws_dynamodb_table.cache.name
+      REPO_CACHE_TABLE       = aws_dynamodb_table.repo_cache.name
+      REPO_CACHE_TTL_SECONDS = "180"
+      GITHUB_CLIENT_ID       = var.github_client_id
+      GITHUB_CLIENT_SECRET   = var.github_client_secret
+      FRONTEND_BASE_URL      = local.frontend_base_url
+      CORS_ALLOW_ORIGINS     = join(",", local.cors_allow_origins)
+      SCAN_QUEUE_URL         = aws_sqs_queue.scan_jobs.url
       # Note: AWS_REGION is reserved by Lambda, use default region
     }
   }
@@ -163,7 +168,10 @@ resource "aws_iam_role_policy" "scan_worker_lambda" {
           "dynamodb:PutItem",
           "dynamodb:Query",
         ]
-        Resource = aws_dynamodb_table.cache.arn
+        Resource = [
+          aws_dynamodb_table.cache.arn,
+          aws_dynamodb_table.repo_cache.arn,
+        ]
       },
       {
         Effect = "Allow"
@@ -215,14 +223,16 @@ resource "aws_lambda_function" "scan_worker" {
 
   environment {
     variables = {
-      ENV                  = var.env
-      DSQL_ENDPOINT        = aws_dsql_cluster.main.arn
-      DYNAMO_TABLE         = aws_dynamodb_table.cache.name
-      GITHUB_CLIENT_ID     = var.github_client_id
-      GITHUB_CLIENT_SECRET = var.github_client_secret
-      FRONTEND_BASE_URL    = local.frontend_base_url
-      CORS_ALLOW_ORIGINS   = join(",", local.cors_allow_origins)
-      SCAN_QUEUE_URL       = aws_sqs_queue.scan_jobs.url
+      ENV                    = var.env
+      DSQL_ENDPOINT          = aws_dsql_cluster.main.arn
+      DYNAMO_TABLE           = aws_dynamodb_table.cache.name
+      REPO_CACHE_TABLE       = aws_dynamodb_table.repo_cache.name
+      REPO_CACHE_TTL_SECONDS = "180"
+      GITHUB_CLIENT_ID       = var.github_client_id
+      GITHUB_CLIENT_SECRET   = var.github_client_secret
+      FRONTEND_BASE_URL      = local.frontend_base_url
+      CORS_ALLOW_ORIGINS     = join(",", local.cors_allow_origins)
+      SCAN_QUEUE_URL         = aws_sqs_queue.scan_jobs.url
     }
   }
 

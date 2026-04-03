@@ -24,6 +24,26 @@ resource "aws_dynamodb_table" "cache" {
   }
 }
 
+resource "aws_dynamodb_table" "repo_cache" {
+  name         = "${var.project}-${var.env}-repo-cache"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "cache_key"
+
+  attribute {
+    name = "cache_key"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  tags = {
+    Name = "${var.project}-${var.env}-repo-cache"
+  }
+}
+
 resource "aws_iam_policy" "dynamodb_access" {
   name        = "${var.project}-${var.env}-dynamodb-access"
   description = "Allows access to the DynamoDB cache table"
@@ -41,7 +61,10 @@ resource "aws_iam_policy" "dynamodb_access" {
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem"
         ]
-        Resource = aws_dynamodb_table.cache.arn
+        Resource = [
+          aws_dynamodb_table.cache.arn,
+          aws_dynamodb_table.repo_cache.arn,
+        ]
       }
     ]
   })

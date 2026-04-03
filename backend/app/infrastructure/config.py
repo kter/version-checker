@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     dsql_endpoint: str = ""
     dynamo_table: str = ""
+    repo_cache_table: str = ""
+    repo_cache_ttl_seconds: int = 180
     scan_queue_url: str = ""
 
     github_client_id: Optional[str] = None

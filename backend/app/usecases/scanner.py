@@ -12,7 +12,11 @@ from xml.etree import ElementTree as ET
 import httpx
 
 from app.domain.entities import EolStatus, Repository
-from app.domain.interfaces import IEolStatusRepository, IRepoRepository
+from app.domain.interfaces import (
+    IEolStatusRepository,
+    IRepoListCacheRepository,
+    IRepoRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -551,25 +555,38 @@ class ScanRepositoryUseCase:
         repo_repository: IRepoRepository,
         eol_status_repository: IEolStatusRepository,
         scanner: Optional[FrameworkEolScanner] = None,
+        repo_cache_repository: Optional[IRepoListCacheRepository] = None,
     ):
         self.repo_repository = repo_repository
         self.eol_status_repository = eol_status_repository
         self.scanner = scanner or FrameworkEolScanner()
+        self.repo_cache_repository = repo_cache_repository
 
     async def get_saved_results(self, org_id: str) -> List[EolStatus]:
         return await self.eol_status_repository.find_by_org(org_id)
 
     async def list_repositories(
-        self, org_id: str, github_access_token: str, user_login: str
+        self,
+        org_id: str,
+        github_access_token: str,
+        user_login: str,
+        use_cache: bool = False,
     ) -> List[Repository]:
         saved_repositories = await self.repo_repository.find_by_org(org_id)
         saved_by_github_id = {repo.github_id: repo for repo in saved_repositories}
 
-        github_client = GitHubClient(github_access_token)
-        if org_id == user_login:
-            repositories = await github_client.list_user_repositories(user_login)
-        else:
-            repositories = await github_client.list_org_repositories(org_id)
+        repositories = None
+        if use_cache and self.repo_cache_repository:
+            repositories = await self.repo_cache_repository.get_repositories(org_id)
+
+        if repositories is None:
+            github_client = GitHubClient(github_access_token)
+            if org_id == user_login:
+                repositories = await github_client.list_user_repositories(user_login)
+            else:
+                repositories = await github_client.list_org_repositories(org_id)
+            if self.repo_cache_repository:
+                await self.repo_cache_repository.set_repositories(org_id, repositories)
 
         persisted_repositories: List[Repository] = []
         for repo in repositories:
