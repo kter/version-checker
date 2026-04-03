@@ -36,7 +36,7 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-end">
+      <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-end">
         <label class="flex flex-col gap-2">
           <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">{{ $t('filter_search_label') }}</span>
           <input
@@ -66,6 +66,19 @@
             class="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-950/70 dark:text-white dark:focus:border-indigo-500 dark:focus:ring-indigo-950"
           >
             <option v-for="option in repositoryStatusFilterOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">{{ $t('sort_label') }}</span>
+          <select
+            v-model="sortOption"
+            data-testid="sort-select"
+            class="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 dark:border-gray-700 dark:bg-gray-950/70 dark:text-white dark:focus:border-indigo-500 dark:focus:ring-indigo-950"
+          >
+            <option v-for="option in sortOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
@@ -170,12 +183,13 @@
             <label class="inline-flex items-center gap-3 cursor-pointer">
               <input
                 type="checkbox"
+                :data-testid="`repository-checkbox-${repo.repository_id}`"
                 class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 :checked="repo.is_selected"
                 :disabled="isSavingSelection || isScanJobActive"
                 @change="toggleRepositorySelection(repo.repository_id)"
               >
-              <span class="text-sm font-semibold text-gray-900 dark:text-white truncate" :title="repo.repo_id">
+              <span data-testid="repository-name" class="text-sm font-semibold text-gray-900 dark:text-white truncate" :title="repo.repo_id">
                 {{ repo.repo_id }}
               </span>
             </label>
@@ -268,6 +282,7 @@ const savedSelectedRepoIds = ref([])
 const searchQuery = ref('')
 const monitoringFilter = ref('all')
 const repositoryStatusFilter = ref('all')
+const sortOption = ref('repository_asc')
 
 const userOrgs = computed(() => organizations.value)
 const selectedOrg = ref('')
@@ -288,12 +303,23 @@ const repositoryStatusFilterOptions = computed(() => [
   { value: 'pending', label: t('filter_status_pending') }
 ])
 
+const sortOptions = computed(() => [
+  { value: 'repository_asc', label: t('sort_repository_asc') },
+  { value: 'repository_desc', label: t('sort_repository_desc') },
+  { value: 'status_priority', label: t('sort_status_priority') },
+  { value: 'last_scanned_desc', label: t('sort_last_scanned_desc') },
+  { value: 'last_scanned_asc', label: t('sort_last_scanned_asc') }
+])
+
 const normalizedSearchQuery = computed(() => searchQuery.value.trim().toLowerCase())
 
 const filteredRepositories = computed(() => {
-  return repositories.value.filter((repo) => {
-    return matchesSearchQuery(repo) && matchesMonitoringFilter(repo) && matchesRepositoryStatusFilter(repo)
-  })
+  return repositories.value
+    .filter((repo) => {
+      return matchesSearchQuery(repo) && matchesMonitoringFilter(repo) && matchesRepositoryStatusFilter(repo)
+    })
+    .slice()
+    .sort(compareRepositories)
 })
 
 const selectedRepositoryIds = computed(() => {
@@ -479,6 +505,74 @@ function getRepositoryStatus(repo) {
     return 'pending'
   }
   return repo.is_eol ? 'eol' : 'supported'
+}
+
+function compareRepositories(leftRepo, rightRepo) {
+  switch (sortOption.value) {
+    case 'repository_desc':
+      return compareText(rightRepo.repo_id, leftRepo.repo_id)
+    case 'status_priority':
+      return compareRepositoryStatus(leftRepo, rightRepo)
+    case 'last_scanned_desc':
+      return compareLastScanned(leftRepo, rightRepo, 'desc')
+    case 'last_scanned_asc':
+      return compareLastScanned(leftRepo, rightRepo, 'asc')
+    case 'repository_asc':
+    default:
+      return compareText(leftRepo.repo_id, rightRepo.repo_id)
+  }
+}
+
+function compareRepositoryStatus(leftRepo, rightRepo) {
+  const statusPriority = {
+    eol: 0,
+    pending: 1,
+    supported: 2
+  }
+  const statusDifference = statusPriority[getRepositoryStatus(leftRepo)] - statusPriority[getRepositoryStatus(rightRepo)]
+  if (statusDifference !== 0) {
+    return statusDifference
+  }
+  return compareText(leftRepo.repo_id, rightRepo.repo_id)
+}
+
+function compareLastScanned(leftRepo, rightRepo, direction) {
+  const leftTimestamp = parseSortableTimestamp(leftRepo.last_scanned_at)
+  const rightTimestamp = parseSortableTimestamp(rightRepo.last_scanned_at)
+  const leftIsValid = leftTimestamp !== null
+  const rightIsValid = rightTimestamp !== null
+
+  if (!leftIsValid && !rightIsValid) {
+    return compareText(leftRepo.repo_id, rightRepo.repo_id)
+  }
+  if (!leftIsValid) {
+    return 1
+  }
+  if (!rightIsValid) {
+    return -1
+  }
+
+  const scannedAtDifference = direction === 'desc'
+    ? rightTimestamp - leftTimestamp
+    : leftTimestamp - rightTimestamp
+
+  if (scannedAtDifference !== 0) {
+    return scannedAtDifference
+  }
+  return compareText(leftRepo.repo_id, rightRepo.repo_id)
+}
+
+function parseSortableTimestamp(value) {
+  if (!value) {
+    return null
+  }
+
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function compareText(leftValue, rightValue) {
+  return String(leftValue || '').localeCompare(String(rightValue || ''))
 }
 
 function matchesSearchQuery(repo) {

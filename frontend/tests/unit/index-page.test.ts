@@ -55,6 +55,10 @@ const baseRepository = {
   source_path: null,
 }
 
+const getRenderedRepositoryNames = (wrapper: Awaited<ReturnType<typeof mountSuspended>>) => {
+  return wrapper.findAll('[data-testid="repository-name"]').map(node => node.text())
+}
+
 describe('Index page', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -134,7 +138,7 @@ describe('Index page', () => {
     })
 
     const wrapper = await mountSuspended(IndexHarness)
-    const checkbox = wrapper.findAll('input[type="checkbox"]')[0]
+    const checkbox = wrapper.find('[data-testid="repository-checkbox-repo-1"]')
 
     await checkbox.setValue(true)
     await wrapper.vm.$nextTick()
@@ -313,6 +317,92 @@ describe('Index page', () => {
     expect(wrapper.text()).toContain('octocat/web')
     expect(wrapper.text()).toContain('octocat/legacy')
     expect(wrapper.text()).toContain('octocat/worker')
+  })
+
+  it('sorts repositories using the selected sort option', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 4,
+      selected_repository_count: 3,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/worker',
+          framework: 'FastAPI',
+          version: '0.110.0',
+          is_eol: false,
+          last_scanned_at: '2026-03-28T12:00:10',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/app',
+          framework: 'Rails',
+          version: '6.1',
+          is_eol: true,
+          last_scanned_at: '2026-03-27T12:00:10',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+          framework: null,
+          version: null,
+          is_eol: null,
+          last_scanned_at: null,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-4',
+          repo_id: 'octocat/api',
+          framework: 'Nuxt',
+          version: '3.16.0',
+          is_eol: false,
+          last_scanned_at: '2026-03-29T12:00:10',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const sortSelect = wrapper.find('[data-testid="sort-select"]')
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/app',
+      'octocat/docs',
+      'octocat/worker'
+    ])
+
+    await sortSelect.setValue('repository_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/worker',
+      'octocat/docs',
+      'octocat/app',
+      'octocat/api'
+    ])
+
+    await sortSelect.setValue('status_priority')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/app',
+      'octocat/docs',
+      'octocat/api',
+      'octocat/worker'
+    ])
+
+    await sortSelect.setValue('last_scanned_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/worker',
+      'octocat/app',
+      'octocat/docs'
+    ])
   })
 
   it('starts a scan job and polls until completion', async () => {
