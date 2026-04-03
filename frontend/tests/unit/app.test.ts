@@ -4,6 +4,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import App from '../../app/app.vue'
 import { useAuth } from '../../app/composables/useAuth'
 import { useMonthlyTokenUsage } from '../../app/composables/useMonthlyTokenUsage'
+import { useScanJob } from '../../app/composables/useScanJob'
 
 const API_BASE = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
 
@@ -37,7 +38,10 @@ vi.stubGlobal('$fetch', fetchMock)
 const AppHarness = defineComponent({
   components: { App },
   setup() {
-    return useAuth()
+    return {
+      ...useAuth(),
+      ...useScanJob(),
+    }
   },
   template: '<App />',
 })
@@ -46,9 +50,11 @@ const AppStateResetHarness = defineComponent({
   setup() {
     const auth = useAuth()
     const monthlyUsage = useMonthlyTokenUsage()
+    const scanJob = useScanJob()
 
     auth.clearAuth()
     monthlyUsage.clear()
+    scanJob.resetState()
 
     return () => null
   },
@@ -142,4 +148,5 @@ describe('App', () => {
     expect(localStorage.getItem('auth_user')).toBeNull()
     expect(localStorage.getItem('auth_orgs')).toBeNull()
   })
+
 })

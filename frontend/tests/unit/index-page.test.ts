@@ -3,6 +3,8 @@ import { defineComponent } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import IndexPage from '../../app/pages/index.vue'
 import { useAuth } from '../../app/composables/useAuth'
+import { useMonthlyTokenUsage } from '../../app/composables/useMonthlyTokenUsage'
+import { useScanJob } from '../../app/composables/useScanJob'
 
 const API_BASE = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
 
@@ -38,9 +40,26 @@ const IndexHarness = defineComponent({
   setup() {
     const auth = useAuth()
     auth.setAuth('token-1', 'octocat', [{ id: 1, login: 'octocat' }])
-    return auth
+    return {
+      ...auth,
+      ...useScanJob(),
+    }
   },
   template: '<IndexPage />',
+})
+
+const IndexStateResetHarness = defineComponent({
+  setup() {
+    const auth = useAuth()
+    const monthlyUsage = useMonthlyTokenUsage()
+    const scanJob = useScanJob()
+
+    auth.clearAuth()
+    monthlyUsage.clear()
+    scanJob.resetState()
+
+    return () => null
+  },
 })
 
 const baseRepository = {
@@ -76,11 +95,13 @@ const getMonitoringCheckboxes = (wrapper: Awaited<ReturnType<typeof mountSuspend
 }
 
 describe('Index page', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers()
     localStorageMock.clear()
     document.body.innerHTML = ''
     fetchMock.mockReset()
+    const wrapper = await mountSuspended(IndexStateResetHarness)
+    wrapper.unmount()
     fetchMock.mockResolvedValue({
       repository_count: 1,
       selected_repository_count: 1,
@@ -654,6 +675,11 @@ describe('Index page', () => {
           } : null
         })
       }
+      if (url === apiUrl('/usage/current-month')) {
+        return Promise.resolve({
+          total_tokens: 3456,
+        })
+      }
 
       return Promise.resolve({})
     })
@@ -664,6 +690,8 @@ describe('Index page', () => {
     await scanButton!.trigger('click')
     await vi.runAllTicks()
     await wrapper.vm.$nextTick()
+    await Promise.resolve()
+    await Promise.resolve()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat'),
@@ -676,6 +704,10 @@ describe('Index page', () => {
       apiUrl('/scan/orgs/octocat/jobs/job-1'),
       { headers: { Authorization: 'Bearer token-1' } }
     ])
+    const usageCall = fetchMock.mock.calls.find(([url]) => url === apiUrl('/usage/current-month'))
+    expect(usageCall?.[1]).toEqual({
+      headers: { Authorization: 'Bearer token-1' }
+    })
     expect(fetchMock.mock.calls.filter(([url]) => url === apiUrl('/scan/orgs/octocat')).length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('Nuxt')
   })
@@ -740,10 +772,8 @@ describe('Index page', () => {
       apiUrl('/scan/orgs/octocat/jobs/job-1'),
       { headers: { Authorization: 'Bearer token-1' } }
     ])
-    expect(wrapper.text()).toContain('Scan job queued')
-    expect(wrapper.text()).toContain('Preparing repository scan...')
-    expect(wrapper.text()).not.toContain('0/0 repositories processed')
-    expect(wrapper.text()).not.toContain('running')
+    expect(wrapper.vm.scanJobStatusLabel).toBe('Scan job queued')
+    expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
   })
 
   it('treats string job counts as numbers when rendering bootstrap progress', async () => {
@@ -770,8 +800,7 @@ describe('Index page', () => {
 
     const wrapper = await mountSuspended(IndexHarness)
 
-    expect(wrapper.text()).toContain('Preparing repository scan...')
-    expect(wrapper.text()).not.toContain('0/0 repositories processed')
+    expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
   })
 
   it('unlocks the UI when a stale bootstrap job is restored after reload', async () => {

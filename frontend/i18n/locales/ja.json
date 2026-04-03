@@ -79,6 +79,7 @@
     "no_filtered_repositories_desc": "フィルタ条件を見直すと、リポジトリを再表示できます。",
     "scan_queued": "スキャンジョブをキューに追加しました",
     "scan_running": "スキャンを実行中です",
+    "scan_header_label": "スキャン中",
     "scan_preparing": "リポジトリのスキャンを準備しています...",
     "scan_progress": "{total} 件中 {completed} 件を処理済み",
     "scan_failed_message": "リポジトリのスキャンに失敗しました。",

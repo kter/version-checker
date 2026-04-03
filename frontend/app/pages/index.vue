@@ -172,26 +172,9 @@
       </div>
     </div>
 
-    <div
-      v-if="activeJob && isScanJobActive"
-      class="bg-amber-50/80 dark:bg-amber-950/70 backdrop-blur-sm border border-amber-200 dark:border-amber-800/50 rounded-2xl p-5 text-amber-900 dark:text-amber-100 shadow-sm"
-    >
-      <div class="flex flex-col gap-2">
-        <div>
-          <p class="text-sm font-semibold">{{ scanJobStatusLabel }}</p>
-          <p
-            v-if="scanJobDetailLabel"
-            class="text-sm text-amber-800/80 dark:text-amber-200/80"
-          >
-            {{ scanJobDetailLabel }}
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="error" class="animate-[fadeIn_0.3s_ease-out] bg-red-50/80 dark:bg-red-950/80 backdrop-blur-sm border border-red-200 dark:border-red-800/50 rounded-2xl p-5 text-red-700 dark:text-red-300 text-sm flex items-center gap-3 mb-6 shadow-sm">
+    <div v-if="currentError" class="animate-[fadeIn_0.3s_ease-out] bg-red-50/80 dark:bg-red-950/80 backdrop-blur-sm border border-red-200 dark:border-red-800/50 rounded-2xl p-5 text-red-700 dark:text-red-300 text-sm flex items-center gap-3 mb-6 shadow-sm">
       <span class="text-xl">⚠️</span>
-      <span class="font-medium">{{ error }}</span>
+      <span class="font-medium">{{ currentError }}</span>
     </div>
 
     <div v-if="filteredRepositories.length > 0" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -390,22 +373,27 @@
 <script setup>
 const { organizations, syncFromStorage, consumeAuthError } = useAuth()
 const { authedFetch } = useAuthedFetch()
+const { fetchCurrentMonthUsage } = useMonthlyTokenUsage()
 const { t } = useI18n()
-const BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled before repository progress started.'
-const PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled while processing repositories.'
-const SCAN_JOB_QUEUE_STALE_AFTER_MS = 5 * 60 * 1000
-const SCAN_JOB_BOOTSTRAP_STALE_AFTER_MS = 3 * 60 * 1000
-const SCAN_JOB_PROGRESS_STALE_AFTER_MS = 15 * 60 * 1000
+const {
+  activeOrg,
+  activeJob,
+  scanErrorMessage,
+  isScanning,
+  isScanJobActive,
+  setActiveOrganization,
+  syncJobState,
+  clearScanError,
+  resetState: resetScanJobState,
+  activeScanJobStatuses,
+  terminalScanJobStatuses,
+} = useScanJob()
 
-const isScanning = ref(false)
 const isSavingSelection = ref(false)
 const isLoading = ref(false)
 const error = ref('')
 const repositories = ref([])
 const repositoryCount = ref(0)
-const activeJob = ref(null)
-const pollingHandle = ref(null)
-const pollingJobId = ref('')
 const savedSelectedRepoIds = ref([])
 const markedRepositoryIds = ref([])
 const isRepositoryDetailsOpen = ref(false)
@@ -417,9 +405,6 @@ const sortOption = ref('repository_asc')
 
 const userOrgs = computed(() => organizations.value)
 const selectedOrg = ref('')
-
-const ACTIVE_SCAN_JOB_STATUSES = new Set(['queued', 'running'])
-const TERMINAL_SCAN_JOB_STATUSES = new Set(['completed', 'partial_failed', 'failed'])
 
 const monitoringFilterOptions = computed(() => [
   { value: 'all', label: t('filter_all') },
@@ -484,9 +469,7 @@ const hasPendingSelectionChanges = computed(() => {
   return JSON.stringify(selectedRepositoryIds.value) !== JSON.stringify([...savedSelectedRepoIds.value].sort())
 })
 
-const isScanJobActive = computed(() => {
-  return Boolean(activeJob.value && ACTIVE_SCAN_JOB_STATUSES.has(activeJob.value.status))
-})
+const currentError = computed(() => error.value || scanErrorMessage.value)
 
 const canSaveSelection = computed(() => {
   return Boolean(selectedOrg.value && hasPendingSelectionChanges.value && !isSavingSelection.value && !isScanJobActive.value)
@@ -537,29 +520,6 @@ const canScan = computed(() => {
   )
 })
 
-const scanJobStatusLabel = computed(() => {
-  if (!activeJob.value) {
-    return ''
-  }
-  if (activeJob.value.status === 'queued') {
-    return t('scan_queued')
-  }
-  return t('scan_running')
-})
-
-const scanJobDetailLabel = computed(() => {
-  if (!activeJob.value) {
-    return ''
-  }
-  if (activeJob.value.status === 'queued' || activeJob.value.total_repos === 0) {
-    return t('scan_preparing')
-  }
-  return t('scan_progress', {
-    completed: activeJob.value.completed_repos,
-    total: activeJob.value.total_repos
-  })
-})
-
 const selectedRepositoryDetails = computed(() => {
   return repositories.value.find(repo => repo.repository_id === activeRepositoryId.value) || null
 })
@@ -575,8 +535,7 @@ function initializeSelectedOrg() {
     repositories.value = []
     repositoryCount.value = 0
     savedSelectedRepoIds.value = []
-    stopPolling()
-    activeJob.value = null
+    resetScanJobState()
     return
   }
 
@@ -586,6 +545,7 @@ function initializeSelectedOrg() {
   }
 
   if (selectedOrg.value) {
+    setActiveOrganization(selectedOrg.value)
     loadData()
   }
 }
@@ -604,7 +564,7 @@ watch(
 
 watch(selectedOrg, (newValue, oldValue) => {
   if (newValue && newValue !== oldValue) {
-    stopPolling()
+    setActiveOrganization(newValue)
     loadData()
   }
 })
@@ -615,122 +575,27 @@ watch(isRepositoryDetailsOpen, (isOpen) => {
   }
 })
 
-onUnmounted(() => {
-  stopPolling()
-})
+watch(
+  () => ({
+    jobId: activeJob.value?.job_id || '',
+    status: activeJob.value?.status || '',
+    org: activeOrg.value
+  }),
+  async (newState, oldState) => {
+    if (!selectedOrg.value || newState.org !== selectedOrg.value) {
+      return
+    }
 
-function stopPolling() {
-  if (pollingHandle.value) {
-    clearInterval(pollingHandle.value)
-    pollingHandle.value = null
-  }
-  pollingJobId.value = ''
-}
+    const isSameJob = Boolean(oldState.jobId && oldState.jobId === newState.jobId)
+    const transitionedToTerminal = activeScanJobStatuses.has(oldState.status) && terminalScanJobStatuses.has(newState.status)
 
-function normalizeJobCount(value) {
-  const normalizedCount = Number(value)
-  return Number.isFinite(normalizedCount) ? normalizedCount : 0
-}
+    if (!isSameJob || !transitionedToTerminal) {
+      return
+    }
 
-function normalizeJob(job) {
-  if (!job) {
-    return null
+    await loadData({ preserveExisting: true, clearError: !scanErrorMessage.value })
   }
-  return {
-    ...job,
-    status: String(job.status || '').toLowerCase(),
-    total_repos: normalizeJobCount(job.total_repos),
-    completed_repos: normalizeJobCount(job.completed_repos),
-    failed_repos: normalizeJobCount(job.failed_repos),
-  }
-}
-
-function getScanJobReferenceTimestamp(job) {
-  return parseSortableTimestamp(job?.updated_at)
-    ?? parseSortableTimestamp(job?.started_at)
-    ?? parseSortableTimestamp(job?.created_at)
-}
-
-function isScanJobStale(job) {
-  if (!job || !ACTIVE_SCAN_JOB_STATUSES.has(job.status)) {
-    return false
-  }
-
-  const referenceTimestamp = getScanJobReferenceTimestamp(job)
-  if (referenceTimestamp === null) {
-    return false
-  }
-
-  const ageInMilliseconds = Date.now() - referenceTimestamp
-  if (job.status === 'queued') {
-    return ageInMilliseconds >= SCAN_JOB_QUEUE_STALE_AFTER_MS
-  }
-  if (job.status === 'running' && job.total_repos === 0) {
-    return ageInMilliseconds >= SCAN_JOB_BOOTSTRAP_STALE_AFTER_MS
-  }
-  if (job.status === 'running' && job.completed_repos + job.failed_repos < job.total_repos) {
-    return ageInMilliseconds >= SCAN_JOB_PROGRESS_STALE_AFTER_MS
-  }
-  return false
-}
-
-function finalizeStaleJob(job) {
-  const finalizedAt = new Date().toISOString()
-  const stalledErrorMessage = job.status === 'queued' || job.total_repos === 0
-    ? BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE
-    : PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE
-  return {
-    ...job,
-    status: 'failed',
-    error_message: job.error_message || stalledErrorMessage,
-    finished_at: job.finished_at || finalizedAt,
-    updated_at: finalizedAt,
-  }
-}
-
-function syncJobState(job) {
-  const normalizedJob = normalizeJob(job)
-  const effectiveJob = isScanJobStale(normalizedJob)
-    ? finalizeStaleJob(normalizedJob)
-    : normalizedJob
-
-  activeJob.value = effectiveJob
-  isScanning.value = Boolean(effectiveJob && ACTIVE_SCAN_JOB_STATUSES.has(effectiveJob.status))
-  if (effectiveJob && ACTIVE_SCAN_JOB_STATUSES.has(effectiveJob.status)) {
-    startPolling(effectiveJob.job_id)
-    return effectiveJob
-  }
-  if (
-    effectiveJob?.error_message === BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE
-    || effectiveJob?.error_message === PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE
-  ) {
-    error.value = getScanJobErrorMessage(effectiveJob)
-  }
-  stopPolling()
-  return effectiveJob
-}
-
-function startPolling(jobId) {
-  if (pollingJobId.value && pollingJobId.value !== jobId) {
-    stopPolling()
-  }
-  pollingJobId.value = jobId
-  if (pollingHandle.value) return
-  pollingHandle.value = setInterval(() => {
-    pollJobStatus(jobId)
-  }, 3000)
-  void pollJobStatus(jobId)
-}
-
-function getScanJobErrorMessage(job) {
-  if (job?.error_message === BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE) {
-    return t('scan_stalled_message')
-  }
-  if (job?.error_message === PROGRESS_STALLED_SCAN_JOB_ERROR_MESSAGE) {
-    return t('scan_progress_stalled_message')
-  }
-  return job?.error_message || t('scan_failed_message')
-}
+)
 
 function normalizeDetectedItem(item) {
   return {
@@ -1037,10 +902,6 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString()
 }
 
-async function loadScanJob(jobId) {
-  return await authedFetch(`/scan/orgs/${selectedOrg.value}/jobs/${jobId}`)
-}
-
 async function loadRepositories() {
   return await authedFetch(`/scan/orgs/${selectedOrg.value}`)
 }
@@ -1060,35 +921,12 @@ async function startScan() {
   })
 }
 
-async function pollJobStatus(jobId) {
-  if (!selectedOrg.value) return
-  try {
-    const response = await loadScanJob(jobId)
-    const effectiveJob = syncJobState(response)
-    if (effectiveJob && TERMINAL_SCAN_JOB_STATUSES.has(effectiveJob.status)) {
-      isScanning.value = false
-      const terminalError = effectiveJob.status === 'partial_failed' || effectiveJob.status === 'failed'
-        ? getScanJobErrorMessage(effectiveJob)
-        : ''
-      await loadData({ preserveExisting: true, clearError: !terminalError })
-      if (terminalError) {
-        error.value = terminalError
-      }
-    }
-  } catch (err) {
-    stopPolling()
-    isScanning.value = false
-    if (err.data?.detail) {
-      error.value = err.data.detail
-    } else {
-      error.value = err.message || t('scan_failed_message')
-    }
-  }
-}
-
 async function loadData(options = {}) {
   if (!selectedOrg.value) return
   const { preserveExisting = false, clearError = true } = options
+  if (activeOrg.value !== selectedOrg.value) {
+    setActiveOrganization(selectedOrg.value)
+  }
   isLoading.value = true
   if (clearError) {
     error.value = ''
@@ -1141,18 +979,19 @@ async function persistSelectionChanges({ reloadAfterSave } = { reloadAfterSave: 
 async function scanOrganization() {
   if (!canScan.value) return
   error.value = ''
+  clearScanError()
   if (hasPendingSelectionChanges.value) {
     const didSave = await persistSelectionChanges({ reloadAfterSave: false })
     if (!didSave) {
       return
     }
   }
-  isScanning.value = true
   try {
+    setActiveOrganization(selectedOrg.value)
     const response = await startScan()
     syncJobState(response)
+    await fetchCurrentMonthUsage()
   } catch (err) {
-    isScanning.value = false
     if (err.data?.detail) {
       error.value = err.data.detail
     } else {

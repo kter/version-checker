@@ -79,6 +79,7 @@
     "no_filtered_repositories_desc": "Adjust your filters to see repositories again.",
     "scan_queued": "Scan job queued",
     "scan_running": "Scan in progress",
+    "scan_header_label": "Scanning now",
     "scan_preparing": "Preparing repository scan...",
     "scan_progress": "{completed}/{total} repositories processed",
     "scan_failed_message": "Failed to run repository scan.",
