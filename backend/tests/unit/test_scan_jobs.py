@@ -1,10 +1,12 @@
 from unittest.mock import AsyncMock
+from datetime import datetime
 
 import pytest
 
 from app.domain.entities import (
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
+    EolStatus,
     Organization,
     Repository,
     ScanJob,
@@ -61,6 +63,85 @@ class TestScanJobService:
             "octocat",
             use_cache=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_get_scan_results_includes_all_detected_items_and_eol_summary(self):
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        repo_repository = AsyncMock()
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_latest_by_org.return_value = None
+        queue = AsyncMock()
+        scanner_usecase = AsyncMock()
+        scanner_usecase.list_repositories.return_value = [
+            Repository(
+                id="repo-1",
+                github_id=1,
+                name="app",
+                full_name="octocat/app",
+                org_id="octocat",
+                owner_login="octocat",
+                default_branch="main",
+                is_selected=True,
+            )
+        ]
+        scanner_usecase.get_saved_results.return_value = [
+            EolStatus(
+                repo_id="repo-1",
+                framework_name="Nuxt",
+                current_version="3.16.0",
+                is_eol=False,
+                last_scanned_at=datetime(2026, 3, 29, 12, 0, 0),
+                source_path="frontend/package.json",
+            ),
+            EolStatus(
+                repo_id="repo-1",
+                framework_name="Node.js",
+                current_version="18.0.0",
+                is_eol=True,
+                eol_date=datetime(2025, 4, 30, 0, 0, 0),
+                last_scanned_at=datetime(2026, 3, 28, 12, 0, 0),
+                source_path="frontend/package.json",
+            ),
+        ]
+
+        service = ScanJobService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            queue,
+            scanner_usecase=scanner_usecase,
+        )
+
+        result = await service.get_scan_results("octocat", "gho_test", "octocat")
+
+        repository = result["repositories"][0]
+        assert repository["detected_item_count"] == 2
+        assert repository["framework"] == "Node.js"
+        assert repository["version"] == "18.0.0"
+        assert repository["is_eol"] is True
+        assert repository["source_path"] == "frontend/package.json"
+        assert repository["detected_items"] == [
+            {
+                "name": "Node.js",
+                "version": "18.0.0",
+                "is_eol": True,
+                "eol_date": "2025-04-30T00:00:00",
+                "last_scanned_at": "2026-03-28T12:00:00",
+                "source_path": "frontend/package.json",
+            },
+            {
+                "name": "Nuxt",
+                "version": "3.16.0",
+                "is_eol": False,
+                "eol_date": None,
+                "last_scanned_at": "2026-03-29T12:00:00",
+                "source_path": "frontend/package.json",
+            },
+        ]
 
     @pytest.mark.asyncio
     async def test_enqueue_scan_reuses_active_job(self):

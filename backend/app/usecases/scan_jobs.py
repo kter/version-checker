@@ -1,5 +1,6 @@
 import logging
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -490,25 +491,46 @@ def _group_statuses_by_repo(
     return grouped
 
 
+def _sort_statuses(statuses: List[Any]) -> List[Any]:
+    return sorted(
+        statuses,
+        key=lambda status: (
+            status.is_eol,
+            status.last_scanned_at or datetime.min,
+            status.framework_name,
+        ),
+        reverse=True,
+    )
+
+
+def _serialize_detection_item(status: Any) -> Dict[str, Any]:
+    return {
+        "name": status.framework_name,
+        "version": status.current_version,
+        "is_eol": status.is_eol,
+        "eol_date": status.eol_date.isoformat() if status.eol_date else None,
+        "last_scanned_at": (
+            status.last_scanned_at.isoformat() if status.last_scanned_at else None
+        ),
+        "source_path": status.source_path,
+    }
+
+
 def _serialize_repository(repo, statuses) -> Dict[str, Any]:
-    primary_status = None
-    if statuses:
-        primary_status = sorted(
-            statuses,
-            key=lambda status: (
-                status.last_scanned_at,
-                status.is_eol,
-                status.framework_name,
-            ),
-            reverse=True,
-        )[0]
+    sorted_statuses = _sort_statuses(statuses)
+    primary_status = sorted_statuses[0] if sorted_statuses else None
+    has_eol_status = any(status.is_eol for status in sorted_statuses)
     return {
         "repository_id": repo.id,
         "repo_id": repo.full_name,
         "is_selected": repo.is_selected,
+        "detected_item_count": len(sorted_statuses),
+        "detected_items": [
+            _serialize_detection_item(status) for status in sorted_statuses
+        ],
         "framework": primary_status.framework_name if primary_status else None,
         "version": primary_status.current_version if primary_status else None,
-        "is_eol": primary_status.is_eol if primary_status else None,
+        "is_eol": has_eol_status if primary_status else None,
         "eol_date": (
             primary_status.eol_date.isoformat()
             if primary_status and primary_status.eol_date

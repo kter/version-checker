@@ -47,6 +47,8 @@ const baseRepository = {
   repository_id: 'repo-1',
   repo_id: 'octocat/app',
   is_selected: true,
+  detected_item_count: 0,
+  detected_items: [],
   framework: null,
   version: null,
   is_eol: null,
@@ -54,6 +56,16 @@ const baseRepository = {
   last_scanned_at: null,
   source_path: null,
 }
+
+const buildDetectedItem = (overrides: Record<string, unknown> = {}) => ({
+  name: 'Nuxt',
+  version: '3.16.0',
+  is_eol: false,
+  eol_date: null,
+  last_scanned_at: '2026-03-28T12:00:10',
+  source_path: 'frontend/package.json',
+  ...overrides,
+})
 
 const getRenderedRepositoryNames = (wrapper: Awaited<ReturnType<typeof mountSuspended>>) => {
   return wrapper.findAll('[data-testid="repository-name"]').map(node => node.text())
@@ -67,6 +79,7 @@ describe('Index page', () => {
   beforeEach(() => {
     vi.useRealTimers()
     localStorageMock.clear()
+    document.body.innerHTML = ''
     fetchMock.mockReset()
     fetchMock.mockResolvedValue({
       repository_count: 1,
@@ -275,9 +288,22 @@ describe('Index page', () => {
           ...baseRepository,
           repository_id: 'repo-2',
           repo_id: 'octocat/api',
-          framework: 'FastAPI',
-          version: '0.110.0',
-          source_path: 'backend/pyproject.toml',
+          framework: 'Node.js',
+          version: '20.11.0',
+          source_path: 'frontend/package.json',
+          detected_item_count: 2,
+          detected_items: [
+            buildDetectedItem({
+              name: 'Node.js',
+              version: '20.11.0',
+              source_path: 'frontend/package.json',
+            }),
+            buildDetectedItem({
+              name: 'FastAPI',
+              version: '0.110.0',
+              source_path: 'backend/pyproject.toml',
+            })
+          ]
         },
         {
           ...baseRepository,
@@ -295,13 +321,74 @@ describe('Index page', () => {
     const wrapper = await mountSuspended(IndexHarness)
     const searchInput = wrapper.find('input[type="search"]')
 
-    await searchInput.setValue('api')
+    await searchInput.setValue('fastapi')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.text()).toContain('1 shown')
     expect(wrapper.text()).toContain('octocat/api')
     expect(wrapper.text()).not.toContain('octocat/app')
     expect(wrapper.text()).not.toContain('octocat/docs')
+  })
+
+  it('opens repository details modal with all detected items from the card', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [{
+        ...baseRepository,
+        framework: 'Node.js',
+        version: '18.0.0',
+        is_eol: true,
+        eol_date: '2025-04-30T00:00:00',
+        last_scanned_at: '2026-03-28T12:00:00',
+        source_path: 'frontend/package.json',
+        detected_item_count: 3,
+        detected_items: [
+          buildDetectedItem({
+            name: 'Node.js',
+            version: '18.0.0',
+            is_eol: true,
+            eol_date: '2025-04-30T00:00:00',
+            last_scanned_at: '2026-03-28T12:00:00',
+            source_path: 'frontend/package.json',
+          }),
+          buildDetectedItem({
+            name: 'Nuxt',
+            version: '3.16.0',
+            last_scanned_at: '2026-03-29T12:00:00',
+            source_path: 'frontend/package.json',
+          }),
+          buildDetectedItem({
+            name: 'FastAPI',
+            version: '0.110.0',
+            last_scanned_at: '2026-03-27T12:00:00',
+            source_path: 'backend/pyproject.toml',
+          })
+        ]
+      }],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="repository-card-repo-1"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const pageText = document.body.textContent || ''
+    expect(pageText).toContain('octocat/app')
+    expect(pageText).toContain('3 detected items')
+    expect(pageText).toContain('Node.js')
+    expect(pageText).toContain('Nuxt')
+    expect(pageText).toContain('FastAPI')
+  })
+
+  it('does not open repository details modal when toggling repository checkboxes', async () => {
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="repository-checkbox-repo-1"]').setValue(false)
+    await wrapper.vm.$nextTick()
+
+    expect(document.body.querySelector('[data-testid="repository-details-modal"]')).toBeNull()
   })
 
   it('filters repositories by monitoring and scan status', async () => {

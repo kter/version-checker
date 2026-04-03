@@ -198,39 +198,50 @@
       <div
         v-for="repo in filteredRepositories"
         :key="repo.repository_id"
+        :data-testid="`repository-card-${repo.repository_id}`"
         class="group relative bg-white/60 dark:bg-gray-900/60 backdrop-blur-md rounded-2xl p-6 border border-white/20 dark:border-white/5 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden"
         :class="isMarkedRepository(repo.repository_id) ? 'ring-2 ring-indigo-400/70 dark:ring-indigo-500/70' : ''"
+        role="button"
+        tabindex="0"
+        @click="openRepositoryDetails(repo)"
+        @keydown.enter.prevent="openRepositoryDetails(repo)"
+        @keydown.space.prevent="openRepositoryDetails(repo)"
       >
         <div
           class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r"
-          :class="repo.framework ? (repo.is_eol ? 'from-red-500 to-rose-500' : 'from-emerald-400 to-cyan-500') : 'from-slate-300 to-slate-400 dark:from-slate-700 dark:to-slate-600'"
+          :class="getRepositoryAccentClass(repo)"
         ></div>
 
         <div class="flex justify-between items-start gap-4 mb-4">
           <div class="min-w-0 flex-1">
-            <label class="inline-flex items-center gap-2 mb-3 cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400">
+            <label class="inline-flex items-center gap-2 mb-3 cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400" @click.stop>
               <input
                 type="checkbox"
                 :data-testid="`bulk-selection-checkbox-${repo.repository_id}`"
                 class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 :checked="isMarkedRepository(repo.repository_id)"
-                @change="toggleMarkedRepository(repo.repository_id)"
+                @click.stop
+                @change.stop="toggleMarkedRepository(repo.repository_id)"
               >
               <span>{{ $t('bulk_selection_checkbox_label') }}</span>
             </label>
-            <label class="inline-flex items-center gap-3 cursor-pointer">
+            <label class="inline-flex items-center gap-3 cursor-pointer" @click.stop>
               <input
                 type="checkbox"
                 :data-testid="`repository-checkbox-${repo.repository_id}`"
                 class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                 :checked="repo.is_selected"
                 :disabled="isSavingSelection || isScanJobActive"
-                @change="toggleRepositorySelection(repo.repository_id)"
+                @click.stop
+                @change.stop="toggleRepositorySelection(repo.repository_id)"
               >
               <span data-testid="repository-name" class="text-sm font-semibold text-gray-900 dark:text-white truncate" :title="repo.repo_id">
                 {{ repo.repo_id }}
               </span>
             </label>
+            <p class="mt-3 text-xs font-medium text-indigo-600 dark:text-indigo-300">
+              {{ $t('detected_items_count', { count: repo.detected_item_count }) }}
+            </p>
           </div>
           <UBadge
             :color="repo.is_selected ? 'indigo' : 'gray'"
@@ -257,8 +268,8 @@
           </div>
           <div class="flex items-center justify-between text-sm">
             <span class="text-gray-500 dark:text-gray-400">{{ $t('col_status') }}</span>
-            <span class="font-medium text-right" :class="repo.framework ? (repo.is_eol ? 'text-red-600 dark:text-red-300' : 'text-emerald-600 dark:text-emerald-300') : 'text-gray-500 dark:text-gray-400'">
-              {{ repo.framework ? (repo.is_eol ? $t('status_eol') : $t('status_supported')) : $t('scan_status_pending') }}
+            <span class="font-medium text-right" :class="getStatusTextClass(getRepositoryStatus(repo))">
+              {{ getRepositoryStatusLabel(repo) }}
             </span>
           </div>
           <div class="flex items-center justify-between text-sm">
@@ -273,9 +284,12 @@
           </div>
         </div>
 
-        <div class="mt-6 pt-4 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center text-xs text-gray-500 dark:text-gray-500">
-          <span>{{ $t('col_last_scanned') }}</span>
-          <span class="text-right">{{ repo.last_scanned_at ? new Date(repo.last_scanned_at).toLocaleString() : $t('not_scanned_yet') }}</span>
+        <div class="mt-6 pt-4 border-t border-gray-100 dark:border-gray-800 flex justify-between items-center gap-4 text-xs text-gray-500 dark:text-gray-500">
+          <span class="font-semibold text-indigo-600 dark:text-indigo-300">{{ $t('open_repository_details') }}</span>
+          <div class="text-right">
+            <div>{{ $t('col_last_scanned') }}</div>
+            <div>{{ formatDateTime(repo.last_scanned_at) }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -300,6 +314,76 @@
       <UIcon name="i-heroicons-arrow-path" class="w-10 h-10 animate-spin text-indigo-500 mx-auto mb-4" />
       <p class="text-gray-500 dark:text-gray-400">{{ $t('loading_repositories') }}</p>
     </div>
+
+    <UModal
+      v-model:open="isRepositoryDetailsOpen"
+      :title="selectedRepositoryDetails?.repo_id || ''"
+      :description="$t('repository_details_description')"
+      :content="{ class: 'sm:max-w-5xl' }"
+      scrollable
+    >
+      <template #body>
+        <div v-if="selectedRepositoryDetails" data-testid="repository-details-modal" class="space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <UBadge
+              :color="getRepositoryStatus(selectedRepositoryDetails) === 'eol' ? 'red' : getRepositoryStatus(selectedRepositoryDetails) === 'supported' ? 'emerald' : 'gray'"
+              variant="subtle"
+            >
+              {{ getRepositoryStatusLabel(selectedRepositoryDetails) }}
+            </UBadge>
+            <UBadge color="gray" variant="subtle">
+              {{ $t('detected_items_count', { count: selectedRepositoryDetails.detected_item_count }) }}
+            </UBadge>
+            <UBadge :color="selectedRepositoryDetails.is_selected ? 'indigo' : 'gray'" variant="subtle">
+              {{ selectedRepositoryDetails.is_selected ? $t('monitoring_enabled') : $t('monitoring_disabled') }}
+            </UBadge>
+          </div>
+
+          <div v-if="selectedRepositoryDetails.detected_items.length > 0" class="space-y-3">
+            <div
+              v-for="item in selectedRepositoryDetails.detected_items"
+              :key="repositoryDetectionKey(item)"
+              data-testid="repository-details-item"
+              class="rounded-2xl border border-gray-200/80 bg-gray-50/70 p-4 dark:border-gray-800 dark:bg-gray-950/40"
+            >
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_detected_item') }}</p>
+                  <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ item.name }}</p>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_version') }}</p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ item.version || $t('not_scanned_yet') }}</p>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_status') }}</p>
+                  <p class="text-sm font-medium" :class="getStatusTextClass(item.is_eol ? 'eol' : 'supported')">
+                    {{ item.is_eol ? $t('status_eol') : $t('status_supported') }}
+                  </p>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_eol_date') }}</p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatDate(item.eol_date) }}</p>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_source_path') }}</p>
+                  <p class="text-sm font-medium break-all text-gray-900 dark:text-gray-100">{{ item.source_path || '-' }}</p>
+                </div>
+                <div class="space-y-1">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">{{ $t('col_last_scanned') }}</p>
+                  <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ formatDateTime(item.last_scanned_at) }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="rounded-2xl border border-dashed border-gray-300 bg-gray-50/70 px-6 py-12 text-center dark:border-gray-700 dark:bg-gray-950/40">
+            <p class="text-base font-semibold text-gray-900 dark:text-white">{{ $t('no_detected_items') }}</p>
+            <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ $t('no_detected_items_desc') }}</p>
+          </div>
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>
 
@@ -318,6 +402,8 @@ const activeJob = ref(null)
 const pollingHandle = ref(null)
 const savedSelectedRepoIds = ref([])
 const markedRepositoryIds = ref([])
+const isRepositoryDetailsOpen = ref(false)
+const activeRepositoryId = ref('')
 const searchQuery = ref('')
 const monitoringFilter = ref('all')
 const repositoryStatusFilter = ref('all')
@@ -455,6 +541,10 @@ const scanJobStatusLabel = computed(() => {
   return t('scan_running')
 })
 
+const selectedRepositoryDetails = computed(() => {
+  return repositories.value.find(repo => repo.repository_id === activeRepositoryId.value) || null
+})
+
 function initializeSelectedOrg() {
   const authErrorMessage = consumeAuthError() || consumeAuthErrorMessage()
   if (authErrorMessage) {
@@ -500,6 +590,12 @@ watch(selectedOrg, (newValue, oldValue) => {
   }
 })
 
+watch(isRepositoryDetailsOpen, (isOpen) => {
+  if (!isOpen) {
+    activeRepositoryId.value = ''
+  }
+})
+
 onUnmounted(() => {
   stopPolling()
 })
@@ -528,8 +624,74 @@ function startPolling(jobId) {
   }, 3000)
 }
 
+function normalizeDetectedItem(item) {
+  return {
+    name: item.name ?? item.framework ?? item.framework_name ?? '',
+    version: item.version ?? item.current_version ?? null,
+    is_eol: Boolean(item.is_eol),
+    eol_date: item.eol_date ?? null,
+    last_scanned_at: item.last_scanned_at ?? null,
+    source_path: item.source_path ?? null,
+  }
+}
+
+function compareDetectedItems(leftItem, rightItem) {
+  const eolDifference = Number(Boolean(rightItem.is_eol)) - Number(Boolean(leftItem.is_eol))
+  if (eolDifference !== 0) {
+    return eolDifference
+  }
+
+  const scannedAtDifference = compareLastScanned(
+    { repo_id: leftItem.name, last_scanned_at: leftItem.last_scanned_at },
+    { repo_id: rightItem.name, last_scanned_at: rightItem.last_scanned_at },
+    'desc'
+  )
+  if (scannedAtDifference !== 0) {
+    return scannedAtDifference
+  }
+
+  return compareText(leftItem.name, rightItem.name)
+}
+
+function normalizeDetectedItems(repo) {
+  const sourceItems = Array.isArray(repo.detected_items) ? repo.detected_items : []
+  const fallbackItems = sourceItems.length === 0 && repo.framework
+    ? [{
+      name: repo.framework,
+      version: repo.version,
+      is_eol: repo.is_eol,
+      eol_date: repo.eol_date,
+      last_scanned_at: repo.last_scanned_at,
+      source_path: repo.source_path,
+    }]
+    : sourceItems
+
+  return fallbackItems
+    .map(normalizeDetectedItem)
+    .filter(item => item.name)
+    .sort(compareDetectedItems)
+}
+
+function normalizeRepository(repo) {
+  const detectedItems = normalizeDetectedItems(repo)
+  const summaryItem = detectedItems[0] || null
+  const hasEolItem = detectedItems.some(item => item.is_eol)
+
+  return {
+    ...repo,
+    detected_items: detectedItems,
+    detected_item_count: Math.max(repo.detected_item_count ?? 0, detectedItems.length),
+    framework: repo.framework ?? summaryItem?.name ?? null,
+    version: repo.version ?? summaryItem?.version ?? null,
+    is_eol: detectedItems.length > 0 ? hasEolItem : null,
+    eol_date: repo.eol_date ?? summaryItem?.eol_date ?? null,
+    last_scanned_at: repo.last_scanned_at ?? summaryItem?.last_scanned_at ?? null,
+    source_path: repo.source_path ?? summaryItem?.source_path ?? null,
+  }
+}
+
 function applyRepositoryResponse(response) {
-  repositories.value = response.repositories || []
+  repositories.value = (response.repositories || []).map(normalizeRepository)
   repositoryCount.value = response.repository_count ?? response.repositories?.length ?? 0
   savedSelectedRepoIds.value = repositories.value
     .filter(repo => repo.is_selected)
@@ -537,6 +699,9 @@ function applyRepositoryResponse(response) {
   markedRepositoryIds.value = markedRepositoryIds.value.filter(repositoryId => {
     return repositories.value.some(repo => repo.repository_id === repositoryId)
   })
+  if (activeRepositoryId.value && !repositories.value.some(repo => repo.repository_id === activeRepositoryId.value)) {
+    isRepositoryDetailsOpen.value = false
+  }
 }
 
 function toggleRepositorySelection(repositoryId) {
@@ -599,11 +764,43 @@ function resetFilters() {
   repositoryStatusFilter.value = 'all'
 }
 
+function getRepositoryAccentClass(repo) {
+  const status = getRepositoryStatus(repo)
+  if (status === 'eol') {
+    return 'from-red-500 to-rose-500'
+  }
+  if (status === 'supported') {
+    return 'from-emerald-400 to-cyan-500'
+  }
+  return 'from-slate-300 to-slate-400 dark:from-slate-700 dark:to-slate-600'
+}
+
 function getRepositoryStatus(repo) {
-  if (!repo.framework) {
+  if (!repo.detected_items.length) {
     return 'pending'
   }
-  return repo.is_eol ? 'eol' : 'supported'
+  return repo.detected_items.some(item => item.is_eol) ? 'eol' : 'supported'
+}
+
+function getRepositoryStatusLabel(repo) {
+  const status = getRepositoryStatus(repo)
+  if (status === 'eol') {
+    return t('status_eol')
+  }
+  if (status === 'supported') {
+    return t('status_supported')
+  }
+  return t('scan_status_pending')
+}
+
+function getStatusTextClass(status) {
+  if (status === 'eol') {
+    return 'text-red-600 dark:text-red-300'
+  }
+  if (status === 'supported') {
+    return 'text-emerald-600 dark:text-emerald-300'
+  }
+  return 'text-gray-500 dark:text-gray-400'
 }
 
 function compareRepositories(leftRepo, rightRepo) {
@@ -679,7 +876,13 @@ function matchesSearchQuery(repo) {
     return true
   }
 
-  const fields = [repo.repo_id, repo.framework, repo.version, repo.source_path]
+  const fields = [
+    repo.repo_id,
+    repo.framework,
+    repo.version,
+    repo.source_path,
+    ...repo.detected_items.flatMap(item => [item.name, item.version, item.source_path])
+  ]
     .filter(Boolean)
     .map(value => String(value).toLowerCase())
 
@@ -701,6 +904,29 @@ function matchesRepositoryStatusFilter(repo) {
     return true
   }
   return getRepositoryStatus(repo) === repositoryStatusFilter.value
+}
+
+function openRepositoryDetails(repo) {
+  activeRepositoryId.value = repo.repository_id
+  isRepositoryDetailsOpen.value = true
+}
+
+function repositoryDetectionKey(item) {
+  return [item.name, item.version, item.source_path, item.last_scanned_at].join('::')
+}
+
+function formatDate(value) {
+  if (!value) {
+    return '-'
+  }
+  return new Date(value).toLocaleDateString()
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return t('not_scanned_yet')
+  }
+  return new Date(value).toLocaleString()
 }
 
 async function loadScanJob(jobId) {
