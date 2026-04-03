@@ -25,6 +25,7 @@
     "monitoring_disabled": "Monitoring disabled",
     "selection_unsaved": "Selection changes not saved",
     "selection_saved": "Selection is saved",
+    "selection_help": "This saves which repositories are monitored and included in scans.",
     "select_all_repositories": "Select All",
     "clear_all_repositories": "Clear All",
     "save_selection": "Save Selection",

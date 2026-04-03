@@ -78,11 +78,12 @@ describe('Index page', () => {
     expect(wrapper.text()).toContain('1 repositories found')
     expect(wrapper.text()).toContain('1 shown')
     expect(wrapper.text()).toContain('1 selected')
+    expect(wrapper.text()).toContain('This saves which repositories are monitored and included in scans.')
     const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
     expect(scanButton?.attributes('disabled')).toBeUndefined()
   })
 
-  it('saves repository selection changes before scanning', async () => {
+  it('saves repository selection changes before scanning when scan is triggered with unsaved changes', async () => {
     let selectionSaved = false
     fetchMock.mockImplementation((url: string, options?: { method?: string, body?: { selected_repo_ids?: string[] } }) => {
       if (url === '/_nuxt/builds/meta/test.json') {
@@ -92,14 +93,39 @@ describe('Index page', () => {
         selectionSaved = true
         return Promise.resolve({ selected_repository_count: 0 })
       }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
       if (url === apiUrl('/scan/orgs/octocat')) {
         return Promise.resolve({
-          repository_count: 1,
-          selected_repository_count: selectionSaved ? 0 : 1,
-          repositories: [{
-            ...baseRepository,
-            is_selected: !selectionSaved
-          }],
+          repository_count: 2,
+          selected_repository_count: selectionSaved ? 1 : 2,
+          repositories: [
+            {
+              ...baseRepository,
+              repository_id: 'repo-1',
+              repo_id: 'octocat/app',
+              is_selected: false,
+            },
+            {
+              ...baseRepository,
+              repository_id: 'repo-2',
+              repo_id: 'octocat/api',
+              is_selected: true,
+            }
+          ],
           latest_job: null,
         })
       }
@@ -108,24 +134,30 @@ describe('Index page', () => {
     })
 
     const wrapper = await mountSuspended(IndexHarness)
-    const checkbox = wrapper.find('input[type="checkbox"]')
+    const checkbox = wrapper.findAll('input[type="checkbox"]')[0]
 
-    await checkbox.setValue(false)
+    await checkbox.setValue(true)
     await wrapper.vm.$nextTick()
 
-    const saveButton = wrapper.findAll('button').find(button => button.text().includes('Save Selection'))
     const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(scanButton?.attributes('disabled')).toBeDefined()
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
 
-    await saveButton!.trigger('click')
+    await scanButton!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat/selection'),
       {
         method: 'PUT',
-        body: { selected_repo_ids: [] },
+        body: { selected_repo_ids: ['repo-1', 'repo-2'] },
+        headers: { Authorization: 'Bearer token-1' }
+      }
+    ])
+    expect(fetchMock.mock.calls).toContainEqual([
+      apiUrl('/scan/orgs/octocat'),
+      {
+        method: 'POST',
         headers: { Authorization: 'Bearer token-1' }
       }
     ])

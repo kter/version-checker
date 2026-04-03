@@ -25,6 +25,7 @@
     "monitoring_disabled": "監視対象外",
     "selection_unsaved": "選択内容は未保存です",
     "selection_saved": "選択内容は保存済みです",
+    "selection_help": "ここで保存するのは、監視対象として保持し、スキャン対象に含めるリポジトリです。",
     "select_all_repositories": "全選択",
     "clear_all_repositories": "全選択解除",
     "save_selection": "選択を保存",

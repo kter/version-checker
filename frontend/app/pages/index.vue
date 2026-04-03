@@ -83,9 +83,14 @@
       </div>
 
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <p class="text-sm font-medium" :class="hasPendingSelectionChanges ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'">
-          {{ hasPendingSelectionChanges ? $t('selection_unsaved') : $t('selection_saved') }}
-        </p>
+        <div class="space-y-1">
+          <p class="text-sm font-medium" :class="hasPendingSelectionChanges ? 'text-amber-700 dark:text-amber-300' : 'text-emerald-700 dark:text-emerald-300'">
+            {{ hasPendingSelectionChanges ? $t('selection_unsaved') : $t('selection_saved') }}
+          </p>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            {{ $t('selection_help') }}
+          </p>
+        </div>
         <div class="flex flex-wrap gap-3 w-full sm:w-auto">
           <UButton
             color="gray"
@@ -345,7 +350,12 @@ const canBulkClearAll = computed(() => {
 })
 
 const canScan = computed(() => {
-  return Boolean(selectedOrg.value && !isScanJobActive.value && !hasPendingSelectionChanges.value && selectedRepositoryCount.value > 0)
+  return Boolean(
+    selectedOrg.value &&
+    !isSavingSelection.value &&
+    !isScanJobActive.value &&
+    selectedRepositoryCount.value > 0
+  )
 })
 
 const scanJobStatusLabel = computed(() => {
@@ -576,17 +586,26 @@ async function loadData(options = {}) {
 
 async function saveSelection() {
   if (!canSaveSelection.value) return
+  await persistSelectionChanges({ reloadAfterSave: true })
+}
+
+async function persistSelectionChanges({ reloadAfterSave } = { reloadAfterSave: true }) {
   isSavingSelection.value = true
   error.value = ''
   try {
     await persistSelection()
-    await loadData({ preserveExisting: true })
+    savedSelectedRepoIds.value = [...selectedRepositoryIds.value]
+    if (reloadAfterSave) {
+      await loadData({ preserveExisting: true })
+    }
+    return true
   } catch (err) {
     if (err.data?.detail) {
       error.value = err.data.detail
     } else {
       error.value = err.message || t('selection_save_failed_message')
     }
+    return false
   } finally {
     isSavingSelection.value = false
   }
@@ -594,8 +613,14 @@ async function saveSelection() {
 
 async function scanOrganization() {
   if (!canScan.value) return
-  isScanning.value = true
   error.value = ''
+  if (hasPendingSelectionChanges.value) {
+    const didSave = await persistSelectionChanges({ reloadAfterSave: false })
+    if (!didSave) {
+      return
+    }
+  }
+  isScanning.value = true
   try {
     const response = await startScan()
     syncJobState(response)
