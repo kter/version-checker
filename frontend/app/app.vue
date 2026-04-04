@@ -29,6 +29,20 @@
               class="w-32"
               @update:model-value="setLocale"
             />
+
+            <button
+              v-if="isAuthenticated && isScanJobActive"
+              type="button"
+              data-testid="global-scan-status"
+              class="hidden md:flex max-w-64 items-center gap-3 rounded-2xl border border-amber-200/80 bg-amber-50/90 px-3 py-2 text-left text-amber-950 shadow-sm transition hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800/70 dark:bg-amber-950/70 dark:text-amber-50 dark:hover:border-amber-700 dark:hover:bg-amber-950"
+              @click="$router.push('/')"
+            >
+              <UIcon name="i-heroicons-arrow-path" class="h-4 w-4 shrink-0 animate-spin" />
+              <div class="min-w-0">
+                <p class="truncate text-xs font-semibold">{{ $t('scan_header_label') }}</p>
+                <p class="truncate text-xs text-amber-800 dark:text-amber-200">{{ scanJobDetailLabel || scanJobStatusLabel }}</p>
+              </div>
+            </button>
             
             <!-- Auth Actions -->
             <template v-if="!isAuthenticated">
@@ -79,6 +93,10 @@ const { locale, locales, setLocale, t } = useI18n()
 const availableLocales = computed(() => locales.value)
 const { token, isAuthenticated, username, syncFromStorage, clearAuth } = useAuth()
 const { totalTokens, isLoading: isMonthlyTokenUsageLoading, clear: clearMonthlyTokenUsage, fetchCurrentMonthUsage } = useMonthlyTokenUsage()
+const { isScanJobActive, scanJobStatusLabel, scanJobDetailLabel, resetState: resetScanJobState } = useScanJob()
+
+let usageFetchTimeoutHandle = null
+let usageFetchIdleHandle = null
 
 useHead({
   title: 'Version Checker'
@@ -101,6 +119,47 @@ const monthlyTokenUsageDisplay = computed(() => {
   return `${formattedMonthlyTokenUsage.value} ${t('tokens_unit')}`
 })
 
+const clearScheduledUsageFetch = () => {
+  if (!import.meta.client) {
+    return
+  }
+
+  if (usageFetchTimeoutHandle !== null) {
+    window.clearTimeout(usageFetchTimeoutHandle)
+    usageFetchTimeoutHandle = null
+  }
+
+  if (usageFetchIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(usageFetchIdleHandle)
+    usageFetchIdleHandle = null
+  }
+}
+
+const scheduleCurrentMonthUsageFetch = () => {
+  if (!import.meta.client) {
+    return
+  }
+
+  clearScheduledUsageFetch()
+
+  const runFetch = async () => {
+    usageFetchTimeoutHandle = null
+    usageFetchIdleHandle = null
+    await fetchCurrentMonthUsage()
+  }
+
+  if (typeof window.requestIdleCallback === 'function') {
+    usageFetchIdleHandle = window.requestIdleCallback(() => {
+      void runFetch()
+    })
+    return
+  }
+
+  usageFetchTimeoutHandle = window.setTimeout(() => {
+    void runFetch()
+  }, 250)
+}
+
 // Check auth state on mount
 onMounted(() => {
   syncFromStorage()
@@ -108,16 +167,20 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearScheduledUsageFetch()
   window.removeEventListener('storage', syncFromStorage)
 })
 
 watch(
   () => token.value,
-  async (authToken) => {
+  (authToken) => {
+    clearScheduledUsageFetch()
+
     if (authToken) {
-      await fetchCurrentMonthUsage()
+      scheduleCurrentMonthUsageFetch()
       return
     }
+    resetScanJobState()
     clearMonthlyTokenUsage()
   },
   { immediate: true }

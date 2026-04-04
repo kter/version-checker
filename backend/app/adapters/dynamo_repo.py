@@ -1,9 +1,9 @@
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import List, Optional
 from aiobotocore.session import get_session
-from app.domain.interfaces import IEolCacheRepository
-from app.domain.entities import EolStatus
+from app.domain.interfaces import IEolCacheRepository, IRepoListCacheRepository
+from app.domain.entities import EolStatus, Repository
 from app.infrastructure.config import settings
 
 
@@ -69,3 +69,110 @@ class DynamoEolCacheRepository(IEolCacheRepository):
             "dynamodb", region_name=settings.aws_region
         ) as client:
             await client.put_item(TableName=self.table_name, Item=item)
+
+
+class DynamoRepoListCacheRepository(IRepoListCacheRepository):
+    def __init__(
+        self,
+        table_name: str = settings.repo_cache_table,
+        ttl_seconds: int = settings.repo_cache_ttl_seconds,
+    ):
+        self.table_name = table_name
+        self.ttl_seconds = ttl_seconds
+        self.session = get_session()
+
+    async def get_repositories(self, org_id: str) -> Optional[List[Repository]]:
+        if not self.table_name:
+            return None
+
+        async with self.session.create_client(
+            "dynamodb",
+            region_name=settings.aws_region,
+        ) as client:
+            response = await client.get_item(
+                TableName=self.table_name,
+                Key={"cache_key": {"S": self._cache_key(org_id)}},
+            )
+
+        item = response.get("Item")
+        if not item:
+            return None
+
+        expires_at = int(item.get("expires_at", {}).get("N", "0"))
+        if expires_at <= int(datetime.now(UTC).timestamp()):
+            return None
+
+        payload = item.get("repositories_json", {}).get("S")
+        if not payload:
+            return None
+
+        try:
+            repositories = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+
+        return [
+            Repository(
+                id="",
+                github_id=int(repository["github_id"]),
+                name=repository["name"],
+                full_name=repository["full_name"],
+                org_id=repository.get("org_id") or org_id,
+                owner_login=repository.get("owner_login", ""),
+                default_branch=repository.get("default_branch") or "main",
+                is_selected=False,
+                updated_at=(
+                    datetime.fromisoformat(repository["updated_at"])
+                    if repository.get("updated_at")
+                    else None
+                ),
+            )
+            for repository in repositories
+        ]
+
+    async def set_repositories(
+        self, org_id: str, repositories: List[Repository]
+    ) -> None:
+        if not self.table_name:
+            return
+
+        expires_at = int(
+            (datetime.now(UTC) + timedelta(seconds=self.ttl_seconds)).timestamp()
+        )
+        payload = json.dumps(
+            [
+                {
+                    "github_id": repository.github_id,
+                    "name": repository.name,
+                    "full_name": repository.full_name,
+                    "org_id": repository.org_id,
+                    "owner_login": repository.owner_login,
+                    "default_branch": repository.default_branch,
+                    "updated_at": (
+                        repository.updated_at.isoformat()
+                        if repository.updated_at
+                        else None
+                    ),
+                }
+                for repository in repositories
+            ],
+            separators=(",", ":"),
+        )
+
+        item = {
+            "cache_key": {"S": self._cache_key(org_id)},
+            "org_id": {"S": org_id},
+            "repositories_json": {"S": payload},
+            "expires_at": {"N": str(expires_at)},
+            "updated_at": {"S": datetime.now(UTC).isoformat()},
+        }
+
+        async with self.session.create_client(
+            "dynamodb",
+            region_name=settings.aws_region,
+        ) as client:
+            await client.put_item(TableName=self.table_name, Item=item)
+
+    @staticmethod
+    def _cache_key(org_id: str) -> str:
+        return f"ORG#{org_id}"

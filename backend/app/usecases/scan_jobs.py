@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -30,6 +32,16 @@ logger = logging.getLogger(__name__)
 
 SCAN_JOB_MESSAGE_BOOTSTRAP = "bootstrap_job"
 SCAN_JOB_MESSAGE_REPOSITORY = "scan_repository"
+SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE = (
+    "Scan job stalled before repository progress started."
+)
+SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE = (
+    "Scan job stalled while processing repositories."
+)
+SCAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=5)
+SCAN_JOB_BOOTSTRAP_STALE_AFTER = timedelta(minutes=3)
+SCAN_JOB_PROGRESS_STALE_AFTER = timedelta(minutes=15)
+SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS = 90
 
 
 class ScanJobService:
@@ -60,10 +72,14 @@ class ScanJobService:
         self, org_id: str, github_access_token: str, user_login: str
     ) -> Dict[str, Any]:
         repos = await self.scanner_usecase.list_repositories(
-            org_id, github_access_token, user_login
+            org_id,
+            github_access_token,
+            user_login,
+            use_cache=True,
         )
         statuses = await self.scanner_usecase.get_saved_results(org_id)
         latest_job = await self.scan_job_repository.find_latest_by_org(org_id)
+        latest_job = await self._finalize_stale_job_if_needed(latest_job)
         statuses_by_repo = _group_statuses_by_repo(
             statuses, {repo.id for repo in repos}
         )
@@ -81,7 +97,8 @@ class ScanJobService:
 
     async def enqueue_scan(self, org_id: str, requested_by: str) -> ScanJob:
         active_job = await self.scan_job_repository.find_active_by_org(org_id)
-        if active_job:
+        active_job = await self._finalize_stale_job_if_needed(active_job)
+        if active_job and active_job.status in ACTIVE_SCAN_JOB_STATUSES:
             return active_job
 
         organization = await self.org_repository.find_by_login(org_id)
@@ -123,7 +140,7 @@ class ScanJobService:
         job = await self.scan_job_repository.find_by_id(job_id)
         if not job or job.org_id != org_id:
             return None
-        return job
+        return await self._finalize_stale_job_if_needed(job)
 
     async def update_selection(
         self,
@@ -137,6 +154,7 @@ class ScanJobService:
             org_id,
             github_access_token,
             user_login,
+            use_cache=True,
         )
         current_repo_ids = {repo.id for repo in repositories}
         unknown_repo_ids = sorted(set(normalized_selected_repo_ids) - current_repo_ids)
@@ -166,6 +184,7 @@ class ScanJobService:
                 org_id,
                 access_token,
                 user_login,
+                use_cache=True,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -178,6 +197,7 @@ class ScanJobService:
             org_id,
             refreshed_token,
             user_login,
+            use_cache=True,
         )
 
     async def _get_organization_access_token(
@@ -206,6 +226,17 @@ class ScanJobService:
             return organization.github_access_token
 
         raise GitHubAuthorizationExpiredError(GITHUB_REAUTH_REQUIRED_DETAIL)
+
+    async def _finalize_stale_job_if_needed(
+        self, job: Optional[ScanJob]
+    ) -> Optional[ScanJob]:
+        if not job or not _is_scan_job_stale(job):
+            return job
+        return await self.scan_job_repository.finalize(
+            job.id,
+            SCAN_JOB_STATUS_FAILED,
+            _get_scan_job_stalled_error_message(job),
+        )
 
 
 class ScanJobWorkerService:
@@ -328,17 +359,25 @@ class ScanJobWorkerService:
 
         try:
             access_token = await self._get_organization_access_token(organization)
-            statuses = await self._scan_repository_with_retry(
-                organization,
-                repository,
-                access_token,
-            )
+            async with asyncio.timeout(SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS):
+                statuses = await self._scan_repository_with_retry(
+                    organization,
+                    repository,
+                    access_token,
+                )
             await self.eol_status_repository.replace_for_repo(repository.id, statuses)
             updated_job = await self.scan_job_repository.record_repo_success(job_id)
         except GitHubAuthorizationExpiredError:
             updated_job = await self.scan_job_repository.record_repo_failure(
                 job_id,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
+            )
+        except TimeoutError:
+            updated_job = await self.scan_job_repository.record_repo_failure(
+                job_id,
+                "Repository scan timed out for "
+                f"{repository.full_name} after "
+                f"{SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS} seconds",
             )
         except Exception as exc:
             logger.exception("Failed to scan repository %s", repository.full_name)
@@ -390,6 +429,7 @@ class ScanJobWorkerService:
                 org_id,
                 access_token,
                 user_login,
+                use_cache=True,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 401:
@@ -402,6 +442,7 @@ class ScanJobWorkerService:
             org_id,
             refreshed_token,
             user_login,
+            use_cache=True,
         )
 
     async def _scan_repository_with_retry(
@@ -459,12 +500,53 @@ def serialize_scan_job(job: Optional[ScanJob]) -> Optional[Dict[str, Any]]:
         "total_repos": job.total_repos,
         "completed_repos": job.completed_repos,
         "failed_repos": job.failed_repos,
-        "started_at": job.started_at.isoformat() if job.started_at else None,
-        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "started_at": _serialize_utc_datetime(job.started_at),
+        "finished_at": _serialize_utc_datetime(job.finished_at),
         "error_message": job.error_message,
-        "created_at": job.created_at.isoformat(),
-        "updated_at": job.updated_at.isoformat(),
+        "created_at": _serialize_utc_datetime(job.created_at),
+        "updated_at": _serialize_utc_datetime(job.updated_at),
     }
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _serialize_utc_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC).isoformat()
+    return value.astimezone(UTC).isoformat()
+
+
+def _is_scan_job_stale(job: ScanJob, now: Optional[datetime] = None) -> bool:
+    if job.status not in ACTIVE_SCAN_JOB_STATUSES:
+        return False
+
+    current_time = now or _utcnow_naive()
+    reference_time = job.updated_at or job.started_at or job.created_at
+
+    if job.status == "queued":
+        return current_time - reference_time >= SCAN_JOB_QUEUE_STALE_AFTER
+
+    if job.status == "running" and job.total_repos == 0:
+        return current_time - reference_time >= SCAN_JOB_BOOTSTRAP_STALE_AFTER
+
+    if (
+        job.status == "running"
+        and job.total_repos > 0
+        and job.completed_repos + job.failed_repos < job.total_repos
+    ):
+        return current_time - reference_time >= SCAN_JOB_PROGRESS_STALE_AFTER
+
+    return False
+
+
+def _get_scan_job_stalled_error_message(job: ScanJob) -> str:
+    if job.status == "queued" or job.total_repos == 0:
+        return SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE
+    return SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE
 
 
 def _build_failure_summary(job: ScanJob) -> str:
@@ -487,32 +569,52 @@ def _group_statuses_by_repo(
     return grouped
 
 
+def _sort_statuses(statuses: List[Any]) -> List[Any]:
+    return sorted(
+        statuses,
+        key=lambda status: (
+            status.is_eol,
+            status.last_scanned_at or datetime.min,
+            status.framework_name,
+        ),
+        reverse=True,
+    )
+
+
+def _serialize_detection_item(status: Any) -> Dict[str, Any]:
+    return {
+        "name": status.framework_name,
+        "version": status.current_version,
+        "is_eol": status.is_eol,
+        "eol_date": status.eol_date.isoformat() if status.eol_date else None,
+        "last_scanned_at": _serialize_utc_datetime(status.last_scanned_at),
+        "source_path": status.source_path,
+    }
+
+
 def _serialize_repository(repo, statuses) -> Dict[str, Any]:
-    primary_status = None
-    if statuses:
-        primary_status = sorted(
-            statuses,
-            key=lambda status: (
-                status.last_scanned_at,
-                status.is_eol,
-                status.framework_name,
-            ),
-            reverse=True,
-        )[0]
+    sorted_statuses = _sort_statuses(statuses)
+    primary_status = sorted_statuses[0] if sorted_statuses else None
+    has_eol_status = any(status.is_eol for status in sorted_statuses)
     return {
         "repository_id": repo.id,
         "repo_id": repo.full_name,
+        "repository_updated_at": _serialize_utc_datetime(repo.updated_at),
         "is_selected": repo.is_selected,
+        "detected_item_count": len(sorted_statuses),
+        "detected_items": [
+            _serialize_detection_item(status) for status in sorted_statuses
+        ],
         "framework": primary_status.framework_name if primary_status else None,
         "version": primary_status.current_version if primary_status else None,
-        "is_eol": primary_status.is_eol if primary_status else None,
+        "is_eol": has_eol_status if primary_status else None,
         "eol_date": (
             primary_status.eol_date.isoformat()
             if primary_status and primary_status.eol_date
             else None
         ),
-        "last_scanned_at": (
-            primary_status.last_scanned_at.isoformat() if primary_status else None
+        "last_scanned_at": _serialize_utc_datetime(
+            primary_status.last_scanned_at if primary_status else None
         ),
         "source_path": primary_status.source_path if primary_status else None,
     }

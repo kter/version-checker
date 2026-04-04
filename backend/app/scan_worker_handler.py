@@ -10,6 +10,7 @@ from app.adapters.database_repo import (
     ScanJobRepository,
     UserRepository,
 )
+from app.adapters.dynamo_repo import DynamoRepoListCacheRepository
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.infrastructure.database import get_session_maker
 from app.usecases.scan_jobs import ScanJobWorkerService
@@ -30,7 +31,12 @@ async def _process_record(record: Dict[str, Any]) -> None:
             eol_status_repository = EolStatusRepository(session)
             scan_job_repository = ScanJobRepository(session)
             queue = SqsScanQueue()
-            scan_usecase = ScanRepositoryUseCase(repo_repository, eol_status_repository)
+            repo_cache_repository = DynamoRepoListCacheRepository()
+            scan_usecase = ScanRepositoryUseCase(
+                repo_repository,
+                eol_status_repository,
+                repo_cache_repository=repo_cache_repository,
+            )
             worker = ScanJobWorkerService(
                 org_repository,
                 user_repository,
@@ -45,6 +51,7 @@ async def _process_record(record: Dict[str, Any]) -> None:
         except Exception:
             await session.rollback()
             logger.exception("Failed to process scan queue message")
+            raise
 
 
 def lambda_handler(event, context):

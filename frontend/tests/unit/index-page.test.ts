@@ -3,6 +3,8 @@ import { defineComponent } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import IndexPage from '../../app/pages/index.vue'
 import { useAuth } from '../../app/composables/useAuth'
+import { useMonthlyTokenUsage } from '../../app/composables/useMonthlyTokenUsage'
+import { useScanJob } from '../../app/composables/useScanJob'
 
 const API_BASE = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
 
@@ -38,15 +40,35 @@ const IndexHarness = defineComponent({
   setup() {
     const auth = useAuth()
     auth.setAuth('token-1', 'octocat', [{ id: 1, login: 'octocat' }])
-    return auth
+    return {
+      ...auth,
+      ...useScanJob(),
+    }
   },
   template: '<IndexPage />',
+})
+
+const IndexStateResetHarness = defineComponent({
+  setup() {
+    const auth = useAuth()
+    const monthlyUsage = useMonthlyTokenUsage()
+    const scanJob = useScanJob()
+
+    auth.clearAuth()
+    monthlyUsage.clear()
+    scanJob.resetState()
+
+    return () => null
+  },
 })
 
 const baseRepository = {
   repository_id: 'repo-1',
   repo_id: 'octocat/app',
+  repository_updated_at: null,
   is_selected: true,
+  detected_item_count: 0,
+  detected_items: [],
   framework: null,
   version: null,
   is_eol: null,
@@ -55,11 +77,32 @@ const baseRepository = {
   source_path: null,
 }
 
+const buildDetectedItem = (overrides: Record<string, unknown> = {}) => ({
+  name: 'Nuxt',
+  version: '3.16.0',
+  is_eol: false,
+  eol_date: null,
+  last_scanned_at: '2026-03-28T12:00:10',
+  source_path: 'frontend/package.json',
+  ...overrides,
+})
+
+const getRenderedRepositoryNames = (wrapper: Awaited<ReturnType<typeof mountSuspended>>) => {
+  return wrapper.findAll('[data-testid="repository-name"]').map(node => node.text())
+}
+
+const getMonitoringCheckboxes = (wrapper: Awaited<ReturnType<typeof mountSuspended>>) => {
+  return wrapper.findAll('[data-testid^="repository-checkbox-"]')
+}
+
 describe('Index page', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers()
     localStorageMock.clear()
+    document.body.innerHTML = ''
     fetchMock.mockReset()
+    const wrapper = await mountSuspended(IndexStateResetHarness)
+    wrapper.unmount()
     fetchMock.mockResolvedValue({
       repository_count: 1,
       selected_repository_count: 1,
@@ -76,12 +119,14 @@ describe('Index page', () => {
       { headers: { Authorization: 'Bearer token-1' } }
     )
     expect(wrapper.text()).toContain('1 repositories found')
+    expect(wrapper.text()).toContain('1 shown')
     expect(wrapper.text()).toContain('1 selected')
+    expect(wrapper.text()).toContain('This saves which repositories are monitored and included in scans.')
     const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
     expect(scanButton?.attributes('disabled')).toBeUndefined()
   })
 
-  it('saves repository selection changes before scanning', async () => {
+  it('saves repository selection changes before scanning when scan is triggered with unsaved changes', async () => {
     let selectionSaved = false
     fetchMock.mockImplementation((url: string, options?: { method?: string, body?: { selected_repo_ids?: string[] } }) => {
       if (url === '/_nuxt/builds/meta/test.json') {
@@ -91,14 +136,39 @@ describe('Index page', () => {
         selectionSaved = true
         return Promise.resolve({ selected_repository_count: 0 })
       }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
       if (url === apiUrl('/scan/orgs/octocat')) {
         return Promise.resolve({
-          repository_count: 1,
-          selected_repository_count: selectionSaved ? 0 : 1,
-          repositories: [{
-            ...baseRepository,
-            is_selected: !selectionSaved
-          }],
+          repository_count: 2,
+          selected_repository_count: selectionSaved ? 1 : 2,
+          repositories: [
+            {
+              ...baseRepository,
+              repository_id: 'repo-1',
+              repo_id: 'octocat/app',
+              is_selected: false,
+            },
+            {
+              ...baseRepository,
+              repository_id: 'repo-2',
+              repo_id: 'octocat/api',
+              is_selected: true,
+            }
+          ],
           latest_job: null,
         })
       }
@@ -107,24 +177,30 @@ describe('Index page', () => {
     })
 
     const wrapper = await mountSuspended(IndexHarness)
-    const checkbox = wrapper.find('input[type="checkbox"]')
+    const checkbox = wrapper.find('[data-testid="repository-checkbox-repo-1"]')
 
-    await checkbox.setValue(false)
+    await checkbox.setValue(true)
     await wrapper.vm.$nextTick()
 
-    const saveButton = wrapper.findAll('button').find(button => button.text().includes('Save Selection'))
     const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(scanButton?.attributes('disabled')).toBeDefined()
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
 
-    await saveButton!.trigger('click')
+    await scanButton!.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat/selection'),
       {
         method: 'PUT',
-        body: { selected_repo_ids: [] },
+        body: { selected_repo_ids: ['repo-1', 'repo-2'] },
+        headers: { Authorization: 'Bearer token-1' }
+      }
+    ])
+    expect(fetchMock.mock.calls).toContainEqual([
+      apiUrl('/scan/orgs/octocat'),
+      {
+        method: 'POST',
         headers: { Authorization: 'Bearer token-1' }
       }
     ])
@@ -154,7 +230,7 @@ describe('Index page', () => {
 
     expect(wrapper.text()).toContain('2 selected')
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(wrapper.findAll('input[type="checkbox"]').every(input => input.element.checked)).toBe(true)
+    expect(getMonitoringCheckboxes(wrapper).every(input => input.element.checked)).toBe(true)
   })
 
   it('clears all repositories with one action', async () => {
@@ -180,11 +256,385 @@ describe('Index page', () => {
 
     expect(wrapper.text()).toContain('0 selected')
     expect(wrapper.text()).toContain('Selection changes not saved')
-    expect(wrapper.findAll('input[type="checkbox"]').every(input => !input.element.checked)).toBe(true)
+    expect(getMonitoringCheckboxes(wrapper).every(input => !input.element.checked)).toBe(true)
+  })
+
+  it('disables monitoring for marked repositories in one action', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 3,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/app',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/api',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="bulk-selection-checkbox-repo-1"]').setValue(true)
+    await wrapper.find('[data-testid="bulk-selection-checkbox-repo-3"]').setValue(true)
+    await wrapper.vm.$nextTick()
+
+    const disableMonitoringButton = wrapper.findAll('button').find(button => button.text().includes('Disable Monitoring'))
+    await disableMonitoringButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 selected')
+    expect(wrapper.text()).toContain('Selection changes not saved')
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-1"]').element.checked).toBe(false)
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-2"]').element.checked).toBe(true)
+    expect(wrapper.find('[data-testid="repository-checkbox-repo-3"]').element.checked).toBe(false)
+  })
+
+  it('filters repositories by search query', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 2,
+      repositories: [
+        baseRepository,
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/api',
+          framework: 'Node.js',
+          version: '20.11.0',
+          source_path: 'frontend/package.json',
+          detected_item_count: 2,
+          detected_items: [
+            buildDetectedItem({
+              name: 'Node.js',
+              version: '20.11.0',
+              source_path: 'frontend/package.json',
+            }),
+            buildDetectedItem({
+              name: 'FastAPI',
+              version: '0.110.0',
+              source_path: 'backend/pyproject.toml',
+            })
+          ]
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+          is_selected: false,
+          framework: 'Nuxt',
+          version: '3.16.0',
+          source_path: 'frontend/package.json',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const searchInput = wrapper.find('input[type="search"]')
+
+    await searchInput.setValue('fastapi')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 shown')
+    expect(wrapper.text()).toContain('octocat/api')
+    expect(wrapper.text()).not.toContain('octocat/app')
+    expect(wrapper.text()).not.toContain('octocat/docs')
+  })
+
+  it('opens repository details modal with all detected items from the card', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [{
+        ...baseRepository,
+        framework: 'Node.js',
+        version: '18.0.0',
+        is_eol: true,
+        eol_date: '2025-04-30T00:00:00',
+        last_scanned_at: '2026-03-28T12:00:00',
+        source_path: 'frontend/package.json',
+        detected_item_count: 3,
+        detected_items: [
+          buildDetectedItem({
+            name: 'Node.js',
+            version: '18.0.0',
+            is_eol: true,
+            eol_date: '2025-04-30T00:00:00',
+            last_scanned_at: '2026-03-28T12:00:00',
+            source_path: 'frontend/package.json',
+          }),
+          buildDetectedItem({
+            name: 'Nuxt',
+            version: '3.16.0',
+            last_scanned_at: '2026-03-29T12:00:00',
+            source_path: 'frontend/package.json',
+          }),
+          buildDetectedItem({
+            name: 'FastAPI',
+            version: '0.110.0',
+            last_scanned_at: '2026-03-27T12:00:00',
+            source_path: 'backend/pyproject.toml',
+          })
+        ]
+      }],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="repository-card-repo-1"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const pageText = document.body.textContent || ''
+    expect(pageText).toContain('octocat/app')
+    expect(pageText).toContain('3 detected items')
+    expect(pageText).toContain('Node.js')
+    expect(pageText).toContain('Nuxt')
+    expect(pageText).toContain('FastAPI')
+  })
+
+  it('renders docker-derived EOL items in the repository summary and details', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [{
+        ...baseRepository,
+        framework: 'Debian',
+        version: 'bookworm',
+        is_eol: true,
+        eol_date: '2026-06-10T00:00:00',
+        last_scanned_at: '2026-03-30T12:00:00',
+        source_path: 'backend/Dockerfile',
+        detected_item_count: 2,
+        detected_items: [
+          buildDetectedItem({
+            name: 'Debian',
+            version: 'bookworm',
+            is_eol: true,
+            eol_date: '2026-06-10T00:00:00',
+            last_scanned_at: '2026-03-30T12:00:00',
+            source_path: 'backend/Dockerfile',
+          }),
+          buildDetectedItem({
+            name: 'Python',
+            version: '3.12',
+            last_scanned_at: '2026-03-29T12:00:00',
+            source_path: 'backend/Dockerfile',
+          })
+        ]
+      }],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+
+    expect(wrapper.text()).toContain('Debian')
+    expect(wrapper.text()).toContain('bookworm')
+    expect(wrapper.text()).toContain('backend/Dockerfile')
+
+    await wrapper.find('[data-testid="repository-card-repo-1"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const pageText = document.body.textContent || ''
+    expect(pageText).toContain('2 detected items')
+    expect(pageText).toContain('Debian')
+    expect(pageText).toContain('Python')
+    expect(pageText).toContain('backend/Dockerfile')
+  })
+
+  it('does not open repository details modal when toggling repository checkboxes', async () => {
+    const wrapper = await mountSuspended(IndexHarness)
+
+    await wrapper.find('[data-testid="repository-checkbox-repo-1"]').setValue(false)
+    await wrapper.vm.$nextTick()
+
+    expect(document.body.querySelector('[data-testid="repository-details-modal"]')).toBeNull()
+  })
+
+  it('filters repositories by monitoring and scan status', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 3,
+      selected_repository_count: 2,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/web',
+          framework: 'Nuxt',
+          version: '3.16.0',
+          is_eol: false,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/legacy',
+          is_selected: false,
+          framework: 'Rails',
+          version: '6.1',
+          is_eol: true,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/worker',
+          framework: null,
+          version: null,
+          is_eol: null,
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const [monitoringSelect, statusSelect] = wrapper.findAll('select')
+
+    await monitoringSelect.setValue('disabled')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('1 shown')
+    expect(wrapper.text()).toContain('octocat/legacy')
+    expect(wrapper.text()).not.toContain('octocat/web')
+    expect(wrapper.text()).not.toContain('octocat/worker')
+
+    await statusSelect.setValue('pending')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('No matching repositories')
+
+    const clearFiltersButton = wrapper.findAll('button').find(button => button.text().includes('Clear Filters'))
+    await clearFiltersButton!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('3 shown')
+    expect(wrapper.text()).toContain('octocat/web')
+    expect(wrapper.text()).toContain('octocat/legacy')
+    expect(wrapper.text()).toContain('octocat/worker')
+  })
+
+  it('sorts repositories using the selected sort option', async () => {
+    fetchMock.mockResolvedValue({
+      repository_count: 4,
+      selected_repository_count: 3,
+      repositories: [
+        {
+          ...baseRepository,
+          repository_id: 'repo-1',
+          repo_id: 'octocat/worker',
+          repository_updated_at: '2026-03-28T13:00:10+00:00',
+          framework: 'FastAPI',
+          version: '0.110.0',
+          is_eol: false,
+          last_scanned_at: '2026-03-28T12:00:10',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-2',
+          repo_id: 'octocat/app',
+          repository_updated_at: '2026-03-27T13:00:10+00:00',
+          framework: 'Rails',
+          version: '6.1',
+          is_eol: true,
+          last_scanned_at: '2026-03-27T12:00:10',
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-3',
+          repo_id: 'octocat/docs',
+          repository_updated_at: null,
+          framework: null,
+          version: null,
+          is_eol: null,
+          last_scanned_at: null,
+        },
+        {
+          ...baseRepository,
+          repository_id: 'repo-4',
+          repo_id: 'octocat/api',
+          repository_updated_at: '2026-03-29T13:00:10+00:00',
+          framework: 'Nuxt',
+          version: '3.16.0',
+          is_eol: false,
+          last_scanned_at: '2026-03-29T12:00:10',
+        }
+      ],
+      latest_job: null,
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const sortSelect = wrapper.find('[data-testid="sort-select"]')
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/app',
+      'octocat/docs',
+      'octocat/worker'
+    ])
+
+    await sortSelect.setValue('repository_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/worker',
+      'octocat/docs',
+      'octocat/app',
+      'octocat/api'
+    ])
+
+    await sortSelect.setValue('status_priority')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/app',
+      'octocat/docs',
+      'octocat/api',
+      'octocat/worker'
+    ])
+
+    await sortSelect.setValue('repository_updated_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/worker',
+      'octocat/app',
+      'octocat/docs'
+    ])
+
+    await sortSelect.setValue('repository_updated_asc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/app',
+      'octocat/worker',
+      'octocat/api',
+      'octocat/docs'
+    ])
+
+    await sortSelect.setValue('last_scanned_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/worker',
+      'octocat/app',
+      'octocat/docs'
+    ])
   })
 
   it('starts a scan job and polls until completion', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
     let refreshCount = 0
     fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
       if (url === '/_nuxt/builds/meta/test.json') {
@@ -250,6 +700,11 @@ describe('Index page', () => {
           } : null
         })
       }
+      if (url === apiUrl('/usage/current-month')) {
+        return Promise.resolve({
+          total_tokens: 3456,
+        })
+      }
 
       return Promise.resolve({})
     })
@@ -259,6 +714,9 @@ describe('Index page', () => {
 
     await scanButton!.trigger('click')
     await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
+    await Promise.resolve()
+    await Promise.resolve()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat'),
@@ -267,15 +725,263 @@ describe('Index page', () => {
         headers: { Authorization: 'Bearer token-1' }
       }
     ])
+    expect(fetchMock.mock.calls).toContainEqual([
+      apiUrl('/scan/orgs/octocat/jobs/job-1'),
+      { headers: { Authorization: 'Bearer token-1' } }
+    ])
+    const usageCall = fetchMock.mock.calls.find(([url]) => url === apiUrl('/usage/current-month'))
+    expect(usageCall?.[1]).toEqual({
+      headers: { Authorization: 'Bearer token-1' }
+    })
+    expect(fetchMock.mock.calls.filter(([url]) => url === apiUrl('/scan/orgs/octocat')).length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.text()).toContain('Nuxt')
+  })
 
-    await vi.advanceTimersByTimeAsync(3000)
+  it('shows preparing copy instead of 0/0 progress while the scan job is bootstrapping', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
+    fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/_nuxt/builds/meta/test.json') {
+        return Promise.resolve({})
+      }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat')) {
+        return Promise.resolve({
+          repository_count: 1,
+          selected_repository_count: 1,
+          repositories: [baseRepository],
+          latest_job: null,
+        })
+      }
+
+      return Promise.resolve({})
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    await scanButton!.trigger('click')
+    await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
 
     expect(fetchMock.mock.calls).toContainEqual([
       apiUrl('/scan/orgs/octocat/jobs/job-1'),
       { headers: { Authorization: 'Bearer token-1' } }
     ])
-    expect(fetchMock.mock.calls.filter(([url]) => url === apiUrl('/scan/orgs/octocat')).length).toBeGreaterThanOrEqual(2)
-    expect(wrapper.text()).toContain('Nuxt')
+    expect(wrapper.vm.scanJobStatusLabel).toBe('Scan job queued')
+    expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
+  })
+
+  it('treats string job counts as numbers when rendering bootstrap progress', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:00:02'))
+    fetchMock.mockImplementation((url: string) => {
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: '0',
+          completed_repos: '0',
+          failed_repos: '0',
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        })
+      }
+
+      return Promise.resolve({
+        repository_count: 1,
+        selected_repository_count: 1,
+        repositories: [baseRepository],
+        latest_job: {
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: '0',
+          completed_repos: '0',
+          failed_repos: '0',
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        },
+      })
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
+  })
+
+  it('unlocks the UI when a stale bootstrap job is restored after reload', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:06:00'))
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [baseRepository],
+      latest_job: {
+        job_id: 'job-1',
+        org_id: 'octocat',
+        status: 'running',
+        total_repos: 0,
+        completed_repos: 0,
+        failed_repos: 0,
+        started_at: '2026-03-28T12:00:01',
+        finished_at: null,
+        error_message: null,
+        created_at: '2026-03-28T12:00:00',
+        updated_at: '2026-03-28T12:00:01'
+      },
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    expect(wrapper.text()).toContain('The scan stalled before repository progress started. Please run it again.')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('unlocks the UI when repository processing progress is stale after reload', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-03-28T12:20:00'))
+    fetchMock.mockResolvedValue({
+      repository_count: 1,
+      selected_repository_count: 1,
+      repositories: [baseRepository],
+      latest_job: {
+        job_id: 'job-1',
+        org_id: 'octocat',
+        status: 'running',
+        total_repos: 1,
+        completed_repos: 0,
+        failed_repos: 0,
+        started_at: '2026-03-28T12:00:01',
+        finished_at: null,
+        error_message: null,
+        created_at: '2026-03-28T12:00:00',
+        updated_at: '2026-03-28T12:00:01'
+      },
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    expect(wrapper.text()).toContain('The scan stalled while processing repositories. Please run it again.')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
+  })
+
+  it('stops polling and unlocks scanning when a stalled scan job fails', async () => {
+    vi.useFakeTimers()
+    let refreshCount = 0
+    fetchMock.mockImplementation((url: string, options?: { method?: string }) => {
+      if (url === '/_nuxt/builds/meta/test.json') {
+        return Promise.resolve({})
+      }
+      if (url === apiUrl('/scan/orgs/octocat') && options?.method === 'POST') {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'queued',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: null,
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:00'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'failed',
+          total_repos: 0,
+          completed_repos: 0,
+          failed_repos: 0,
+          started_at: '2026-03-28T12:00:01',
+          finished_at: '2026-03-28T12:03:10',
+          error_message: 'Scan job stalled before repository progress started.',
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:03:10'
+        })
+      }
+      if (url === apiUrl('/scan/orgs/octocat')) {
+        refreshCount += 1
+        return Promise.resolve({
+          repository_count: 1,
+          selected_repository_count: 1,
+          repositories: [baseRepository],
+          latest_job: refreshCount > 1 ? {
+            job_id: 'job-1',
+            org_id: 'octocat',
+            status: 'failed',
+            total_repos: 0,
+            completed_repos: 0,
+            failed_repos: 0,
+            started_at: '2026-03-28T12:00:01',
+            finished_at: '2026-03-28T12:03:10',
+            error_message: 'Scan job stalled before repository progress started.',
+            created_at: '2026-03-28T12:00:00',
+            updated_at: '2026-03-28T12:03:10'
+          } : null,
+        })
+      }
+
+      return Promise.resolve({})
+    })
+
+    const wrapper = await mountSuspended(IndexHarness)
+    const scanButton = wrapper.findAll('button').find(button => button.text().includes('Scan Repositories'))
+
+    await scanButton!.trigger('click')
+    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(3000)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('The scan stalled before repository progress started. Please run it again.')
+    expect(wrapper.text()).not.toContain('Preparing repository scan...')
+    expect(wrapper.text()).not.toContain('Scan in progress')
+    expect(scanButton?.attributes('disabled')).toBeUndefined()
   })
 
   it('disables scanning when no repositories are selected', async () => {

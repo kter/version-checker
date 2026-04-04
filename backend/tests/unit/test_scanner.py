@@ -70,6 +70,159 @@ class TestFrameworkEolScanner:
 
         assert release["name"] == "3.5"
 
+    def test_extract_dockerfile_runtime_and_explicit_debian_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:3.12-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        assert ("Python", "3.12", "backend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Debian", "bookworm", "backend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_dockerfile_skips_implicit_debian_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:3.12-slim
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        extracted = [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Python", "3.12", "backend/Dockerfile") in extracted
+        assert ("Debian", "bookworm", "backend/Dockerfile") not in extracted
+        assert not any(name == "Debian" for name, _, _ in extracted)
+
+    def test_extract_dockerfile_runtime_and_explicit_alpine_base(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM node:20-alpine3.20
+        """
+
+        results = scanner._extract_dependencies("frontend/Dockerfile", content)
+
+        assert ("Node.js", "20", "frontend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Alpine Linux", "3.20", "frontend/Dockerfile") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_direct_os_image_dependency(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM debian:12-slim
+        FROM ubuntu:24.04
+        """
+
+        results = scanner._extract_dependencies("Dockerfile.release", content)
+
+        assert ("Debian", "12", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert ("Ubuntu", "24.04", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_direct_os_image_dependency_supports_future_codename(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM ubuntu:oracular
+        """
+
+        results = scanner._extract_dependencies("Dockerfile.release", content)
+
+        assert ("Ubuntu", "oracular", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
+    def test_extract_dockerfile_resolves_arg_defaults_and_multistage(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        ARG PYTHON_VERSION=3.12
+        FROM --platform=$BUILDPLATFORM python:${PYTHON_VERSION}-bookworm AS builder
+        FROM node:20-alpine3.20 AS frontend
+        FROM python:${PYTHON_VERSION}-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        extracted = [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+        assert extracted.count(("Python", "3.12", "backend/Dockerfile")) == 2
+        assert extracted.count(("Debian", "bookworm", "backend/Dockerfile")) == 2
+        assert ("Node.js", "20", "backend/Dockerfile") in extracted
+        assert ("Alpine Linux", "3.20", "backend/Dockerfile") in extracted
+
+    def test_extract_dockerfile_skips_unresolved_arg_reference(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM python:${PYTHON_VERSION}-bookworm
+        """
+
+        results = scanner._extract_dependencies("backend/Dockerfile", content)
+
+        assert results == []
+
+    def test_match_release_supports_codename(self):
+        scanner = FrameworkEolScanner()
+        releases = [
+            {
+                "name": "12",
+                "codename": "bookworm",
+                "releaseDate": "2023-06-10",
+                "isEol": False,
+            },
+            {
+                "name": "11",
+                "codename": "bullseye",
+                "releaseDate": "2021-08-14",
+                "isEol": False,
+            },
+        ]
+
+        release = scanner._match_release(releases, "bookworm")
+
+        assert release["name"] == "12"
+
+    def test_match_release_supports_codename_in_composite_tag(self):
+        scanner = FrameworkEolScanner()
+        releases = [
+            {
+                "name": "12",
+                "codename": "bookworm",
+                "releaseDate": "2023-06-10",
+                "isEol": False,
+            },
+            {
+                "name": "11",
+                "codename": "bullseye",
+                "releaseDate": "2021-08-14",
+                "isEol": False,
+            },
+        ]
+
+        release = scanner._match_release(releases, "slim-bookworm")
+
+        assert release["name"] == "12"
+
 
 class TestScanRepositoryUseCase:
     @pytest.mark.asyncio
@@ -107,6 +260,7 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
+            updated_at=datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC),
         )
         discovered_new_repo = Repository(
             id="",
@@ -116,16 +270,7 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
-        )
-        saved_existing_repo = Repository(
-            id="repo-db-1",
-            github_id=101,
-            name="web",
-            full_name="test-org/web",
-            org_id="test-org",
-            owner_login="test-org",
-            default_branch="main",
-            is_selected=True,
+            updated_at=datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC),
         )
         saved_new_repo = Repository(
             id="repo-db-2",
@@ -136,11 +281,12 @@ class TestScanRepositoryUseCase:
             owner_login="test-org",
             default_branch="main",
             is_selected=False,
+            updated_at=datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC),
         )
 
         repo_repository = AsyncMock()
         repo_repository.find_by_org.return_value = [existing_repo]
-        repo_repository.save.side_effect = [saved_existing_repo, saved_new_repo]
+        repo_repository.save.return_value = saved_new_repo
         status_repository = AsyncMock()
 
         usecase = ScanRepositoryUseCase(repo_repository, status_repository)
@@ -151,14 +297,18 @@ class TestScanRepositoryUseCase:
         ):
             results = await usecase.list_repositories("test-org", "gho_test", "octocat")
 
-        assert results == [saved_existing_repo, saved_new_repo]
+        assert results[0].id == existing_repo.id
+        assert results[0].github_id == existing_repo.github_id
+        assert results[0].full_name == existing_repo.full_name
+        assert results[0].is_selected is True
+        assert results[1] == saved_new_repo
+        assert results[0].updated_at == datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC)
+        assert results[1].updated_at == datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC)
         repo_repository.find_by_org.assert_awaited_once_with("test-org")
-        assert repo_repository.save.await_count == 2
-        first_saved_repo = repo_repository.save.await_args_list[0].args[0]
-        second_saved_repo = repo_repository.save.await_args_list[1].args[0]
-        assert first_saved_repo.id == "repo-db-1"
-        assert first_saved_repo.is_selected is True
-        assert second_saved_repo.is_selected is False
+        repo_repository.save.assert_awaited_once()
+        saved_repo = repo_repository.save.await_args.args[0]
+        assert saved_repo.github_id == 102
+        assert saved_repo.is_selected is False
 
     @pytest.mark.asyncio
     async def test_list_repositories_uses_personal_scope_for_authenticated_user(self):
@@ -202,6 +352,117 @@ class TestScanRepositoryUseCase:
         mock_list_user_repositories.assert_awaited_once_with("octocat")
         mock_list_org_repositories.assert_not_awaited()
         assert repo_repository.save.await_args.args[0].is_selected is False
+
+    @pytest.mark.asyncio
+    async def test_list_repositories_uses_cache_when_requested(self):
+        existing_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=True,
+        )
+        cached_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+        )
+
+        repo_repository = AsyncMock()
+        repo_repository.find_by_org.return_value = [existing_repo]
+        repo_repository.save.return_value = existing_repo
+        status_repository = AsyncMock()
+        repo_cache_repository = AsyncMock()
+        repo_cache_repository.get_repositories.return_value = [cached_repo]
+
+        usecase = ScanRepositoryUseCase(
+            repo_repository,
+            status_repository,
+            repo_cache_repository=repo_cache_repository,
+        )
+
+        with patch(
+            "app.usecases.scanner.GitHubClient.list_org_repositories",
+            new=AsyncMock(),
+        ) as mock_list_org_repositories:
+            results = await usecase.list_repositories(
+                "test-org",
+                "gho_test",
+                "octocat",
+                use_cache=True,
+            )
+
+        assert results == [existing_repo]
+        repo_cache_repository.get_repositories.assert_awaited_once_with("test-org")
+        repo_cache_repository.set_repositories.assert_not_awaited()
+        repo_repository.save.assert_not_awaited()
+        mock_list_org_repositories.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_list_repositories_saves_cached_repo_when_metadata_changed(self):
+        existing_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="main",
+            is_selected=True,
+        )
+        cached_repo = Repository(
+            id="",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="trunk",
+        )
+        updated_repo = Repository(
+            id="repo-db-1",
+            github_id=101,
+            name="web",
+            full_name="test-org/web",
+            org_id="test-org",
+            owner_login="test-org",
+            default_branch="trunk",
+            is_selected=True,
+        )
+
+        repo_repository = AsyncMock()
+        repo_repository.find_by_org.return_value = [existing_repo]
+        repo_repository.save.return_value = updated_repo
+        status_repository = AsyncMock()
+        repo_cache_repository = AsyncMock()
+        repo_cache_repository.get_repositories.return_value = [cached_repo]
+
+        usecase = ScanRepositoryUseCase(
+            repo_repository,
+            status_repository,
+            repo_cache_repository=repo_cache_repository,
+        )
+
+        results = await usecase.list_repositories(
+            "test-org",
+            "gho_test",
+            "octocat",
+            use_cache=True,
+        )
+
+        assert results == [updated_repo]
+        repo_repository.save.assert_awaited_once()
+        saved_repo = repo_repository.save.await_args.args[0]
+        assert saved_repo.id == "repo-db-1"
+        assert saved_repo.default_branch == "trunk"
+        assert saved_repo.is_selected is True
 
     @pytest.mark.asyncio
     async def test_execute_scans_selected_repositories_and_persists_statuses(self):
@@ -273,7 +534,7 @@ class TestScanRepositoryUseCase:
             results = await usecase.execute("test-org", "gho_test", "octocat")
 
         assert results == [status]
-        assert repo_repository.save.await_count == 2
+        repo_repository.save.assert_not_awaited()
         scanner.scan_repo.assert_awaited_once_with(selected_repo, "gho_test")
         status_repository.replace_for_repo.assert_awaited_once_with(
             "repo-db-1", [status]

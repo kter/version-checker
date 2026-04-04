@@ -296,8 +296,8 @@ class TestScanEndpoints:
             "started_at": None,
             "finished_at": None,
             "error_message": None,
-            "created_at": "2026-03-28T12:00:00",
-            "updated_at": "2026-03-28T12:00:00",
+            "created_at": "2026-03-28T12:00:00+00:00",
+            "updated_at": "2026-03-28T12:00:00+00:00",
         }
 
     @pytest.mark.asyncio
@@ -344,11 +344,11 @@ class TestScanEndpoints:
             "total_repos": 4,
             "completed_repos": 1,
             "failed_repos": 0,
-            "started_at": "2026-03-28T12:00:00",
+            "started_at": "2026-03-28T12:00:00+00:00",
             "finished_at": None,
             "error_message": None,
-            "created_at": "2026-03-28T11:59:55",
-            "updated_at": "2026-03-28T12:00:05",
+            "created_at": "2026-03-28T11:59:55+00:00",
+            "updated_at": "2026-03-28T12:00:05+00:00",
         }
 
 

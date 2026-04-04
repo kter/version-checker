@@ -61,6 +61,8 @@ class TestSettings:
             )
             assert s.env == "local"
             assert s.aws_region == "ap-northeast-1"
+            assert s.repo_cache_table == ""
+            assert s.repo_cache_ttl_seconds == 180
             assert s.github_client_id is None
             assert s.github_client_secret is None
             assert s.frontend_base_url == "http://localhost:3000"

@@ -83,6 +83,7 @@ class RepoModel(Base):
             owner_login=self.owner_login,
             default_branch=self.default_branch,
             is_selected=True if self.is_selected is None else self.is_selected,
+            updated_at=None,
         )
 
 

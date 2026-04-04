@@ -154,7 +154,7 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 resource "aws_cloudfront_distribution" "frontend" {
   enabled             = true
   is_ipv6_enabled     = true
-  price_class         = "PriceClass_100" # US, Canada, Europe (cheaper)
+  price_class         = "PriceClass_200" # Adds Asia edge locations with modest cost increase
   default_root_object = "index.html"
 
   # Custom domain (optional)
