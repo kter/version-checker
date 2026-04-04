@@ -198,3 +198,6 @@ class TestScanJobRepoProgressModel:
         assert progress.error_message is None
         assert progress.created_at == created_at
         assert progress.updated_at == updated_at
+
+    def test_uses_only_primary_key_constraints_for_dsql_compatibility(self):
+        assert ScanJobRepoProgressModel.__table__.indexes == set()

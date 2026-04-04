@@ -1,5 +1,5 @@
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, Integer, DateTime, Boolean, Index
+from sqlalchemy import Column, String, Integer, DateTime, Boolean
 from datetime import datetime
 from app.domain.entities import (
     User,
@@ -147,10 +147,6 @@ class ScanJobModel(Base):
 
 class ScanJobRepoProgressModel(Base):
     __tablename__ = "scan_job_repo_progress"
-    __table_args__ = (
-        Index("ix_scan_job_repo_progress_job_id", "job_id"),
-        Index("ix_scan_job_repo_progress_job_id_status", "job_id", "status"),
-    )
 
     job_id = Column(String, primary_key=True)
     repo_id = Column(String, primary_key=True)
