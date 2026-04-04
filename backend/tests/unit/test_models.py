@@ -7,6 +7,7 @@ from app.adapters.models import (
     OrgModel,
     RepoModel,
     ScanJobModel,
+    ScanJobRepoProgressModel,
     TokenUsageEventModel,
     UserModel,
 )
@@ -174,3 +175,29 @@ class TestTokenUsageEventModel:
         assert event.output_tokens == 30
         assert event.total_tokens == 150
         assert event.recorded_at == recorded_at
+
+
+class TestScanJobRepoProgressModel:
+    def test_to_domain(self):
+        created_at = datetime(2026, 3, 28, 10, 0, 0)
+        updated_at = datetime(2026, 3, 28, 10, 0, 5)
+        model = ScanJobRepoProgressModel(
+            job_id="job-1",
+            repo_id="repo-1",
+            status="completed",
+            error_message=None,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+
+        progress = model.to_domain()
+
+        assert progress.job_id == "job-1"
+        assert progress.repo_id == "repo-1"
+        assert progress.status == "completed"
+        assert progress.error_message is None
+        assert progress.created_at == created_at
+        assert progress.updated_at == updated_at
+
+    def test_uses_only_primary_key_constraints_for_dsql_compatibility(self):
+        assert ScanJobRepoProgressModel.__table__.indexes == set()

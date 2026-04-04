@@ -9,13 +9,14 @@ from app.adapters.database_repo import (
     OrgRepository,
     RepoRepository,
     ScanJobRepository,
+    TokenUsageRepository,
     UserRepository,
 )
 from app.adapters.dynamo_repo import DynamoRepoListCacheRepository
 from app.adapters.sqs_scan_queue import SqsScanQueue
 from app.infrastructure.database import get_db_session
 from app.api.auth_deps import verify_org_access
-from app.domain.entities import User
+from app.domain.entities import ScanJob, User
 from app.usecases.github_auth import (
     GITHUB_REAUTH_REQUIRED_DETAIL,
     GitHubAuthorizationExpiredError,
@@ -65,6 +66,22 @@ async def get_scan_job_service(
         queue,
         scanner_usecase=scan_usecase,
     )
+
+
+async def _serialize_scan_job_with_usage(
+    session: AsyncSession,
+    user_id: str,
+    job: ScanJob | None,
+):
+    payload = serialize_scan_job(job)
+    if not payload:
+        return payload
+
+    token_usage_repository = TokenUsageRepository(session)
+    payload["current_month_total_tokens"] = (
+        await token_usage_repository.get_current_month_total_tokens(user_id)
+    )
+    return payload
 
 
 @router.get("/orgs/{org_id}")
@@ -123,6 +140,7 @@ async def update_repository_selection(
 async def get_scan_job(
     org_id: str,
     job_id: str,
+    session: AsyncSession = Depends(get_db_session),
     service: ScanJobService = Depends(get_scan_job_service),
     user: User = Depends(verify_org_access),
 ):
@@ -131,7 +149,7 @@ async def get_scan_job(
         job = await service.get_job(org_id, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Scan job not found")
-        return serialize_scan_job(job)
+        return await _serialize_scan_job_with_usage(session, user.id, job)
     except HTTPException:
         raise
     except Exception as e:
@@ -141,13 +159,14 @@ async def get_scan_job(
 @router.post("/orgs/{org_id}", status_code=status.HTTP_202_ACCEPTED)
 async def scan_organization_repos(
     org_id: str,
+    session: AsyncSession = Depends(get_db_session),
     service: ScanJobService = Depends(get_scan_job_service),
     user: User = Depends(verify_org_access),
 ):
     """Queue a new scan for an organization's repos."""
     try:
         job = await service.enqueue_scan(org_id, user.username)
-        return serialize_scan_job(job)
+        return await _serialize_scan_job_with_usage(session, user.id, job)
     except GitHubAuthorizationExpiredError:
         raise HTTPException(status_code=401, detail=GITHUB_REAUTH_REQUIRED_DETAIL)
     except httpx.HTTPStatusError as exc:

@@ -10,6 +10,7 @@ type ScanJob = {
   error_message?: string | null
   created_at?: string | null
   updated_at?: string | null
+  current_month_total_tokens?: number | string | null
 }
 
 const BOOTSTRAP_STALLED_SCAN_JOB_ERROR_MESSAGE = 'Scan job stalled before repository progress started.'
@@ -100,7 +101,7 @@ const finalizeStaleJob = (job: ScanJob) => {
 
 export const useScanJob = () => {
   const { authedFetch } = useAuthedFetch()
-  const { fetchCurrentMonthUsage } = useMonthlyTokenUsage()
+  const { fetchCurrentMonthUsage, syncCurrentMonthUsage } = useMonthlyTokenUsage()
   const { t } = useI18n()
 
   const activeOrg = useState<string>('scan.activeOrg', () => '')
@@ -238,6 +239,10 @@ export const useScanJob = () => {
     const effectiveJob = isScanJobStale(normalizedJob)
       ? finalizeStaleJob(normalizedJob as ScanJob)
       : normalizedJob
+
+    if (normalizedJob?.current_month_total_tokens !== undefined) {
+      syncCurrentMonthUsage(normalizedJob.current_month_total_tokens)
+    }
 
     activeJob.value = effectiveJob
 

@@ -16,6 +16,20 @@ export const useMonthlyTokenUsage = () => {
     isReady.value = false
   }
 
+  const syncCurrentMonthUsage = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) {
+      return
+    }
+
+    const normalizedTotal = Number(value)
+    if (!Number.isFinite(normalizedTotal)) {
+      return
+    }
+
+    totalTokens.value = normalizedTotal
+    isReady.value = true
+  }
+
   const fetchCurrentMonthUsage = async () => {
     if (!import.meta.client || !token.value) {
       clear()
@@ -41,5 +55,6 @@ export const useMonthlyTokenUsage = () => {
     isReady,
     clear,
     fetchCurrentMonthUsage,
+    syncCurrentMonthUsage,
   }
 }

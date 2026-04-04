@@ -6,22 +6,42 @@ import pytest
 
 import app.usecases.scan_jobs as scan_jobs_module
 from app.domain.entities import (
+    SCAN_JOB_REPO_STATUS_COMPLETED,
+    SCAN_JOB_REPO_STATUS_PENDING,
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
     EolStatus,
     Organization,
     Repository,
     ScanJob,
+    ScanJobRepoProgress,
 )
 from app.usecases.scan_jobs import (
     SCAN_JOB_BOOTSTRAP_STALLED_ERROR_MESSAGE,
     SCAN_JOB_MESSAGE_BOOTSTRAP,
     SCAN_JOB_MESSAGE_REPOSITORY,
     SCAN_JOB_PROGRESS_STALLED_ERROR_MESSAGE,
+    ScanJobSerializationRetryExhaustedError,
     ScanJobService,
     ScanJobWorkerService,
+    _is_retryable_serialization_error,
     serialize_scan_job,
 )
+
+
+def make_repo_progress(
+    repo_id: str,
+    *,
+    job_id: str = "job-1",
+    status: str = SCAN_JOB_REPO_STATUS_PENDING,
+    error_message: str | None = None,
+) -> ScanJobRepoProgress:
+    return ScanJobRepoProgress(
+        job_id=job_id,
+        repo_id=repo_id,
+        status=status,
+        error_message=error_message,
+    )
 
 
 class TestScanJobService:
@@ -745,6 +765,7 @@ class TestScanJobWorkerService:
             }
         )
 
+        scan_job_repository.seed_repo_progress.assert_awaited_once_with("job-1", [])
         scan_job_repository.start.assert_awaited_once_with("job-1", 0)
         scan_job_repository.mark_completed.assert_awaited_once_with("job-1")
         queue.send_messages.assert_not_awaited()
@@ -822,6 +843,10 @@ class TestScanJobWorkerService:
             "octocat",
             use_cache=True,
         )
+        scan_job_repository.seed_repo_progress.assert_awaited_once_with(
+            "job-1",
+            ["repo-1"],
+        )
         scan_job_repository.start.assert_awaited_once_with("job-1", 1)
         queue.send_messages.assert_awaited_once_with(
             [
@@ -833,6 +858,39 @@ class TestScanJobWorkerService:
                 }
             ]
         )
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_skips_requeued_running_job_after_progress_started(self):
+        job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=2,
+        )
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = job
+
+        worker = ScanJobWorkerService(
+            AsyncMock(),
+            AsyncMock(),
+            AsyncMock(),
+            AsyncMock(),
+            scan_job_repository,
+            AsyncMock(),
+            scanner_usecase=AsyncMock(),
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_BOOTSTRAP,
+                "job_id": "job-1",
+                "org_id": "octocat",
+            }
+        )
+
+        scan_job_repository.start.assert_not_awaited()
+        scan_job_repository.seed_repo_progress.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_repository_scan_finalizes_partial_failure(self):
@@ -878,6 +936,9 @@ class TestScanJobWorkerService:
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
         scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.find_repo_progress.return_value = make_repo_progress(
+            "repo-1"
+        )
         scan_job_repository.record_repo_failure.return_value = updated_job
         queue = AsyncMock()
         scanner = AsyncMock()
@@ -906,6 +967,11 @@ class TestScanJobWorkerService:
         finalize_args = scan_job_repository.finalize.await_args.args
         assert finalize_args[0] == "job-1"
         assert finalize_args[1] == SCAN_JOB_STATUS_PARTIAL_FAILED
+        scan_job_repository.record_repo_failure.assert_awaited_once_with(
+            "job-1",
+            "repo-1",
+            "Repository scan failed for octocat/broken: boom",
+        )
 
     @pytest.mark.asyncio
     async def test_repository_scan_finalizes_failed_when_all_repos_fail(self):
@@ -943,6 +1009,9 @@ class TestScanJobWorkerService:
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
         scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.find_repo_progress.return_value = make_repo_progress(
+            "repo-1"
+        )
         scan_job_repository.record_repo_failure.return_value = updated_job
         queue = AsyncMock()
 
@@ -968,6 +1037,11 @@ class TestScanJobWorkerService:
         finalize_args = scan_job_repository.finalize.await_args.args
         assert finalize_args[0] == "job-1"
         assert finalize_args[1] == SCAN_JOB_STATUS_FAILED
+        scan_job_repository.record_repo_failure.assert_awaited_once_with(
+            "job-1",
+            "repo-1",
+            "Repository not found: repo-1",
+        )
 
     @pytest.mark.asyncio
     async def test_repository_scan_records_timeout_as_failure(self, monkeypatch):
@@ -1020,6 +1094,9 @@ class TestScanJobWorkerService:
         eol_status_repository = AsyncMock()
         scan_job_repository = AsyncMock()
         scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.find_repo_progress.return_value = make_repo_progress(
+            "repo-1"
+        )
         scan_job_repository.record_repo_failure.return_value = updated_job
         queue = AsyncMock()
         scanner = AsyncMock()
@@ -1051,9 +1128,163 @@ class TestScanJobWorkerService:
 
         scan_job_repository.record_repo_failure.assert_awaited_once_with(
             "job-1",
+            "repo-1",
             "Repository scan timed out for octocat/app after 0.01 seconds",
         )
         scan_job_repository.finalize.assert_awaited_once()
         finalize_args = scan_job_repository.finalize.await_args.args
         assert finalize_args[0] == "job-1"
         assert finalize_args[1] == SCAN_JOB_STATUS_FAILED
+
+    @pytest.mark.asyncio
+    async def test_repository_scan_skips_duplicate_terminal_repo_and_retries_finalization(
+        self,
+    ):
+        initial_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=1,
+            failed_repos=0,
+        )
+
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.find_repo_progress.return_value = make_repo_progress(
+            "repo-1",
+            status=SCAN_JOB_REPO_STATUS_COMPLETED,
+        )
+
+        worker = ScanJobWorkerService(
+            AsyncMock(),
+            AsyncMock(),
+            AsyncMock(),
+            AsyncMock(),
+            scan_job_repository,
+            AsyncMock(),
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                "job_id": "job-1",
+                "org_id": "octocat",
+                "repo_id": "repo-1",
+            }
+        )
+
+        scan_job_repository.record_repo_success.assert_not_awaited()
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-1",
+            "completed",
+            None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_repository_scan_falls_back_to_failed_progress_when_success_retry_exhausts(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            scan_jobs_module, "SCAN_JOB_SERIALIZATION_RETRY_DELAY_SECONDS", 0
+        )
+        initial_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=0,
+        )
+        failed_job = ScanJob(
+            id="job-1",
+            org_id="octocat",
+            requested_by="octocat",
+            status="running",
+            total_repos=1,
+            completed_repos=0,
+            failed_repos=1,
+            error_message="Repository scan bookkeeping failed for octocat/app: please retry",
+        )
+
+        org_repository = AsyncMock()
+        user_repository = AsyncMock()
+        org_repository.find_by_login.return_value = Organization(
+            id="octocat",
+            github_id=1,
+            name="octocat",
+            login="octocat",
+            github_access_token="gho_test",
+        )
+        repo_repository = AsyncMock()
+        repo_repository.find_by_id.return_value = Repository(
+            id="repo-1",
+            github_id=1,
+            name="app",
+            full_name="octocat/app",
+            org_id="octocat",
+            owner_login="octocat",
+            default_branch="main",
+        )
+        eol_status_repository = AsyncMock()
+        scan_job_repository = AsyncMock()
+        scan_job_repository.find_by_id.return_value = initial_job
+        scan_job_repository.find_repo_progress.return_value = make_repo_progress(
+            "repo-1"
+        )
+        scan_job_repository.record_repo_success.side_effect = RuntimeError(
+            "SerializationError: please retry"
+        )
+        scan_job_repository.record_repo_failure.return_value = failed_job
+        scanner = AsyncMock()
+        scanner.scan_repo.return_value = []
+
+        worker = ScanJobWorkerService(
+            org_repository,
+            user_repository,
+            repo_repository,
+            eol_status_repository,
+            scan_job_repository,
+            AsyncMock(),
+            scanner=scanner,
+        )
+
+        await worker.process_message(
+            {
+                "message_type": SCAN_JOB_MESSAGE_REPOSITORY,
+                "job_id": "job-1",
+                "org_id": "octocat",
+                "repo_id": "repo-1",
+            }
+        )
+
+        assert scan_job_repository.record_repo_success.await_count == 3
+        scan_job_repository.record_repo_failure.assert_awaited_once()
+        failure_args = scan_job_repository.record_repo_failure.await_args.args
+        assert failure_args[:2] == ("job-1", "repo-1")
+        assert "Repository scan bookkeeping failed for octocat/app" in failure_args[2]
+        scan_job_repository.finalize.assert_awaited_once_with(
+            "job-1",
+            SCAN_JOB_STATUS_FAILED,
+            "1 of 1 repositories failed during scan. Last error: "
+            + failed_job.error_message,
+        )
+
+
+class TestSerializationHelpers:
+    def test_detects_retryable_serialization_errors(self):
+        assert _is_retryable_serialization_error(
+            RuntimeError("SerializationError: please retry (OC000)")
+        )
+
+    def test_scan_job_retry_exhausted_error_preserves_original_error(self):
+        original_error = RuntimeError("SerializationError: please retry")
+
+        error = ScanJobSerializationRetryExhaustedError(
+            "record success",
+            original_error,
+        )
+
+        assert error.original_error is original_error
