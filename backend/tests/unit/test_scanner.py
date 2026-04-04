@@ -138,6 +138,19 @@ class TestFrameworkEolScanner:
             for dependency, version, source_path in results
         ]
 
+    def test_extract_direct_os_image_dependency_supports_future_codename(self):
+        scanner = FrameworkEolScanner()
+        content = """
+        FROM ubuntu:oracular
+        """
+
+        results = scanner._extract_dependencies("Dockerfile.release", content)
+
+        assert ("Ubuntu", "oracular", "Dockerfile.release") in [
+            (dependency.framework_name, version, source_path)
+            for dependency, version, source_path in results
+        ]
+
     def test_extract_dockerfile_resolves_arg_defaults_and_multistage(self):
         scanner = FrameworkEolScanner()
         content = """
@@ -186,6 +199,27 @@ class TestFrameworkEolScanner:
         ]
 
         release = scanner._match_release(releases, "bookworm")
+
+        assert release["name"] == "12"
+
+    def test_match_release_supports_codename_in_composite_tag(self):
+        scanner = FrameworkEolScanner()
+        releases = [
+            {
+                "name": "12",
+                "codename": "bookworm",
+                "releaseDate": "2023-06-10",
+                "isEol": False,
+            },
+            {
+                "name": "11",
+                "codename": "bullseye",
+                "releaseDate": "2021-08-14",
+                "isEol": False,
+            },
+        ]
+
+        release = scanner._match_release(releases, "slim-bookworm")
 
         assert release["name"] == "12"
 

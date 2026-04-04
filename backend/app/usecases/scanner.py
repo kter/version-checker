@@ -115,42 +115,22 @@ DOCKER_OS_PRODUCTS = {
     "ubuntu": SupportedDependency("ubuntu", "ubuntu", "Ubuntu"),
 }
 
-DEBIAN_CODENAMES = {
-    "bookworm",
-    "bullseye",
-    "buster",
-    "stretch",
-    "jessie",
-    "wheezy",
-    "squeeze",
-    "lenny",
-    "etch",
-    "trixie",
-    "forky",
-    "sid",
-}
-
-UBUNTU_CODENAMES = {
-    "noble",
-    "jammy",
-    "focal",
-    "bionic",
-    "xenial",
-    "mantic",
-    "lunar",
-    "kinetic",
-    "impish",
-    "hirsute",
-    "groovy",
-    "focal",
-    "eoan",
-    "disco",
-    "cosmic",
-    "bionic",
-    "artful",
-    "zesty",
-    "yakkety",
-    "xenial",
+DOCKER_GENERIC_TAG_TOKENS = {
+    "latest",
+    "stable",
+    "testing",
+    "unstable",
+    "oldstable",
+    "oldoldstable",
+    "slim",
+    "alpine",
+    "fpm",
+    "cli",
+    "apache",
+    "nginx",
+    "servercore",
+    "windowsservercore",
+    "nanoserver",
 }
 
 DOCKER_VARIABLE_PATTERN = re.compile(
@@ -245,7 +225,7 @@ def _split_docker_image_reference(image_reference: str) -> tuple[str, Optional[s
     return image_name.lower(), None
 
 
-def _extract_direct_os_cycle(tag: Optional[str], codenames: set[str]) -> Optional[str]:
+def _extract_direct_os_cycle(tag: Optional[str]) -> Optional[str]:
     if not tag:
         return None
 
@@ -253,27 +233,30 @@ def _extract_direct_os_cycle(tag: Optional[str], codenames: set[str]) -> Optiona
     version = _extract_version(primary_token)
     if version:
         return version
-    if primary_token in codenames:
+    if (
+        primary_token
+        and primary_token not in DOCKER_GENERIC_TAG_TOKENS
+        and re.fullmatch(r"[a-z][a-z0-9]*", primary_token)
+    ):
         return primary_token
     return None
 
 
-def _extract_debian_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
+def _extract_non_alpine_runtime_os_cycle(tag: Optional[str]) -> Optional[str]:
     if not tag:
         return None
-    for token in re.split(r"[-_.]", _normalize_cycle_text(tag)):
-        if token in DEBIAN_CODENAMES:
-            return token
-    return None
-
-
-def _extract_ubuntu_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
-    if not tag:
+    normalized = _normalize_cycle_text(tag)
+    match = re.match(r"^\d+(?:\.\d+){0,3}[-_.](?P<suffix>.+)$", normalized)
+    if not match:
         return None
-    for token in re.split(r"[-_.]", _normalize_cycle_text(tag)):
-        if token in UBUNTU_CODENAMES:
-            return token
-    return None
+    suffix = match.group("suffix")
+    tokens = [token for token in re.split(r"[-_.]", suffix) if token]
+    if not any(
+        token not in DOCKER_GENERIC_TAG_TOKENS and not token.isdigit()
+        for token in tokens
+    ):
+        return None
+    return suffix
 
 
 def _extract_alpine_cycle_from_tag(tag: Optional[str]) -> Optional[str]:
@@ -753,9 +736,7 @@ class FrameworkEolScanner:
                 matches.append((runtime_dependency, runtime_version, path))
 
             if image_name in {"node", "python", "php", "ruby", "go", "golang"}:
-                os_dependency = self._extract_runtime_base_os_dependency(path, tag)
-                if os_dependency:
-                    matches.append(os_dependency)
+                matches.extend(self._extract_runtime_base_os_dependency(path, tag))
 
         direct_os_dependency = self._extract_direct_os_dependency(path, image_name, tag)
         if direct_os_dependency:
@@ -767,20 +748,19 @@ class FrameworkEolScanner:
         self,
         path: str,
         tag: str,
-    ) -> Optional[tuple[SupportedDependency, str, str]]:
+    ) -> List[tuple[SupportedDependency, str, str]]:
         alpine_cycle = _extract_alpine_cycle_from_tag(tag)
         if alpine_cycle:
-            return (DOCKER_OS_PRODUCTS["alpine"], alpine_cycle, path)
+            return [(DOCKER_OS_PRODUCTS["alpine"], alpine_cycle, path)]
 
-        debian_cycle = _extract_debian_cycle_from_tag(tag)
-        if debian_cycle:
-            return (DOCKER_OS_PRODUCTS["debian"], debian_cycle, path)
+        non_alpine_cycle = _extract_non_alpine_runtime_os_cycle(tag)
+        if not non_alpine_cycle:
+            return []
 
-        ubuntu_cycle = _extract_ubuntu_cycle_from_tag(tag)
-        if ubuntu_cycle:
-            return (DOCKER_OS_PRODUCTS["ubuntu"], ubuntu_cycle, path)
-
-        return None
+        return [
+            (DOCKER_OS_PRODUCTS["debian"], non_alpine_cycle, path),
+            (DOCKER_OS_PRODUCTS["ubuntu"], non_alpine_cycle, path),
+        ]
 
     def _extract_direct_os_dependency(
         self,
@@ -794,12 +774,12 @@ class FrameworkEolScanner:
                 return (DOCKER_OS_PRODUCTS["alpine"], cycle, path)
 
         if image_name == "debian":
-            cycle = _extract_direct_os_cycle(tag, DEBIAN_CODENAMES)
+            cycle = _extract_direct_os_cycle(tag)
             if cycle:
                 return (DOCKER_OS_PRODUCTS["debian"], cycle, path)
 
         if image_name == "ubuntu":
-            cycle = _extract_direct_os_cycle(tag, UBUNTU_CODENAMES)
+            cycle = _extract_direct_os_cycle(tag)
             if cycle:
                 return (DOCKER_OS_PRODUCTS["ubuntu"], cycle, path)
 
@@ -850,6 +830,32 @@ class FrameworkEolScanner:
                 reverse=True,
             )
             return exact_candidates[0]
+
+        if re.search(r"[a-z]", normalized_current):
+            normalized_tokens = {
+                token
+                for token in re.split(r"[-_.]", normalized_current)
+                if token
+                and token not in DOCKER_GENERIC_TAG_TOKENS
+                and token != normalized_current
+            }
+            token_candidates = [
+                release
+                for release in releases
+                if normalized_tokens
+                and (
+                    _normalize_cycle_text(release.get("name")) in normalized_tokens
+                    or _normalize_cycle_text(release.get("codename"))
+                    in normalized_tokens
+                )
+            ]
+            if token_candidates:
+                token_candidates.sort(
+                    key=lambda release: _parse_date(release.get("releaseDate"))
+                    or datetime.min,
+                    reverse=True,
+                )
+                return token_candidates[0]
 
         current_parts = _version_parts(current_version)
         if not current_parts:
