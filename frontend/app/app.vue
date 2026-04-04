@@ -95,6 +95,9 @@ const { token, isAuthenticated, username, syncFromStorage, clearAuth } = useAuth
 const { totalTokens, isLoading: isMonthlyTokenUsageLoading, clear: clearMonthlyTokenUsage, fetchCurrentMonthUsage } = useMonthlyTokenUsage()
 const { isScanJobActive, scanJobStatusLabel, scanJobDetailLabel, resetState: resetScanJobState } = useScanJob()
 
+let usageFetchTimeoutHandle = null
+let usageFetchIdleHandle = null
+
 useHead({
   title: 'Version Checker'
 })
@@ -116,6 +119,47 @@ const monthlyTokenUsageDisplay = computed(() => {
   return `${formattedMonthlyTokenUsage.value} ${t('tokens_unit')}`
 })
 
+const clearScheduledUsageFetch = () => {
+  if (!import.meta.client) {
+    return
+  }
+
+  if (usageFetchTimeoutHandle !== null) {
+    window.clearTimeout(usageFetchTimeoutHandle)
+    usageFetchTimeoutHandle = null
+  }
+
+  if (usageFetchIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(usageFetchIdleHandle)
+    usageFetchIdleHandle = null
+  }
+}
+
+const scheduleCurrentMonthUsageFetch = () => {
+  if (!import.meta.client) {
+    return
+  }
+
+  clearScheduledUsageFetch()
+
+  const runFetch = async () => {
+    usageFetchTimeoutHandle = null
+    usageFetchIdleHandle = null
+    await fetchCurrentMonthUsage()
+  }
+
+  if (typeof window.requestIdleCallback === 'function') {
+    usageFetchIdleHandle = window.requestIdleCallback(() => {
+      void runFetch()
+    })
+    return
+  }
+
+  usageFetchTimeoutHandle = window.setTimeout(() => {
+    void runFetch()
+  }, 250)
+}
+
 // Check auth state on mount
 onMounted(() => {
   syncFromStorage()
@@ -123,14 +167,17 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearScheduledUsageFetch()
   window.removeEventListener('storage', syncFromStorage)
 })
 
 watch(
   () => token.value,
-  async (authToken) => {
+  (authToken) => {
+    clearScheduledUsageFetch()
+
     if (authToken) {
-      await fetchCurrentMonthUsage()
+      scheduleCurrentMonthUsageFetch()
       return
     }
     resetScanJobState()

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, nextTick } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import App from '../../app/app.vue'
@@ -35,6 +35,12 @@ Object.defineProperty(globalThis, 'localStorage', {
 const fetchMock = vi.fn()
 vi.stubGlobal('$fetch', fetchMock)
 
+const flushScheduledUsageFetch = async () => {
+  await vi.advanceTimersByTimeAsync(250)
+  await Promise.resolve()
+  await nextTick()
+}
+
 const AppHarness = defineComponent({
   components: { App },
   setup() {
@@ -62,6 +68,7 @@ const AppStateResetHarness = defineComponent({
 
 describe('App', () => {
   beforeEach(async () => {
+    vi.useRealTimers()
     localStorageMock.clear()
     fetchMock.mockReset()
     const wrapper = await mountSuspended(AppStateResetHarness)
@@ -69,6 +76,10 @@ describe('App', () => {
     fetchMock.mockResolvedValue({
       total_tokens: 3456,
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('shows the login button when no auth state is stored', async () => {
@@ -79,6 +90,7 @@ describe('App', () => {
   })
 
   it('hydrates auth state from storage on mount and shows monthly token usage', async () => {
+    vi.useFakeTimers()
     localStorage.setItem('auth_token', 'token-1')
     localStorage.setItem('auth_user', 'alice')
     localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
@@ -87,6 +99,13 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('alice')
     expect(wrapper.text()).not.toContain('Login with GitHub')
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      apiUrl('/usage/current-month'),
+      { headers: { Authorization: 'Bearer token-1' } }
+    )
+
+    await flushScheduledUsageFetch()
+
     expect(fetchMock).toHaveBeenCalledWith(
       apiUrl('/usage/current-month'),
       { headers: { Authorization: 'Bearer token-1' } }
@@ -95,13 +114,14 @@ describe('App', () => {
   })
 
   it('reacts to auth state changes after the app is mounted', async () => {
+    vi.useFakeTimers()
     const wrapper = await mountSuspended(AppHarness)
 
     expect(wrapper.text()).toContain('Login with GitHub')
 
     wrapper.vm.setAuth('token-2', 'octocat', [{ id: 2, login: 'github' }])
     await nextTick()
-    await Promise.resolve()
+    await flushScheduledUsageFetch()
 
     expect(wrapper.text()).toContain('octocat')
     expect(fetchMock).toHaveBeenCalledWith(
@@ -122,6 +142,7 @@ describe('App', () => {
   })
 
   it('falls back to a dash when the usage request fails', async () => {
+    vi.useFakeTimers()
     fetchMock.mockReset()
     fetchMock.mockRejectedValue(new Error('usage failed'))
     localStorage.setItem('auth_token', 'token-1')
@@ -129,11 +150,13 @@ describe('App', () => {
     localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
 
     const wrapper = await mountSuspended(AppHarness)
+    await flushScheduledUsageFetch()
 
     expect(wrapper.text()).toContain('This month: -')
   })
 
   it('clears auth state when the usage request returns 401', async () => {
+    vi.useFakeTimers()
     fetchMock.mockReset()
     fetchMock.mockRejectedValue({ statusCode: 401 })
     localStorage.setItem('auth_token', 'token-1')
@@ -141,7 +164,7 @@ describe('App', () => {
     localStorage.setItem('auth_orgs', JSON.stringify([{ id: 1, login: 'acme' }]))
 
     const wrapper = await mountSuspended(AppHarness)
-    await nextTick()
+    await flushScheduledUsageFetch()
 
     expect(wrapper.text()).toContain('Login with GitHub')
     expect(localStorage.getItem('auth_token')).toBeNull()

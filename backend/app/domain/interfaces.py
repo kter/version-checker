@@ -41,6 +41,10 @@ class IOrgRepository(ABC):
     async def find_by_login(self, login: str) -> Optional[Organization]:
         pass
 
+    @abstractmethod
+    async def find_by_github_id(self, github_id: int) -> Optional[Organization]:
+        pass
+
 
 class IRepoRepository(ABC):
     @abstractmethod

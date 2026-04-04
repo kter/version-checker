@@ -112,7 +112,7 @@ resource "aws_lambda_function" "backend" {
 
   # Configuration
   timeout     = 30
-  memory_size = 256
+  memory_size = 512
 
   tags = {
     Environment = var.env

@@ -371,7 +371,7 @@
 </template>
 
 <script setup>
-const { organizations, syncFromStorage, consumeAuthError } = useAuth()
+const { organizations, consumeAuthError } = useAuth()
 const { authedFetch } = useAuthedFetch()
 const { fetchCurrentMonthUsage } = useMonthlyTokenUsage()
 const { t } = useI18n()
@@ -551,10 +551,6 @@ function initializeSelectedOrg() {
     loadData()
   }
 }
-
-onMounted(() => {
-  syncFromStorage()
-})
 
 watch(
   userOrgs,

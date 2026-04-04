@@ -139,6 +139,13 @@ class OrgRepository(IOrgRepository):
         model = result.scalar_one_or_none()
         return model.to_domain() if model else None
 
+    async def find_by_github_id(self, github_id: int) -> Optional[Organization]:
+        result = await self.session.execute(
+            select(OrgModel).where(OrgModel.github_id == github_id)
+        )
+        model = result.scalar_one_or_none()
+        return model.to_domain() if model else None
+
 
 class RepoRepository(IRepoRepository):
     def __init__(self, session: AsyncSession):

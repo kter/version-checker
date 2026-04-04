@@ -6,8 +6,8 @@ import httpx
 
 from app.infrastructure.config import settings
 from app.infrastructure.database import get_db_session
-from app.adapters.database_repo import UserRepository
-from app.domain.entities import User
+from app.adapters.database_repo import OrgRepository, UserRepository
+from app.domain.entities import Organization, User
 from app.usecases.github_auth import (
     GITHUB_REAUTH_REQUIRED_DETAIL,
     GitHubAuthorizationExpiredError,
@@ -59,6 +59,7 @@ async def verify_org_access(
     In a high-scale app, we might cache this in DynamoDB or the DB.
     """
     repo = UserRepository(session)
+    org_repo = OrgRepository(session)
     token_service = GitHubTokenService()
     try:
         user = await token_service.ensure_user_access_token(repo, user)
@@ -68,19 +69,60 @@ async def verify_org_access(
     if org_id in {user.username, str(user.github_id)}:
         return user
 
+    organization = await _find_accessible_organization(org_repo, org_id)
+    if organization and organization.token_owner_user_id == user.id:
+        return user
+
     async with httpx.AsyncClient() as client:
         orgs = await _fetch_user_orgs(client, repo, token_service, user)
-        org_ids = [str(org["id"]) for org in orgs]
-        org_logins = [org["login"] for org in orgs]
+    await _sync_accessible_accounts(org_repo, user, orgs)
 
-        # We check both ID and login just in case the client passes the login string
-        if org_id not in org_ids and org_id not in org_logins:
-            raise HTTPException(
-                status_code=403,
-                detail="Forbidden: You do not have access to this organization",
-            )
-
+    organization = await _find_accessible_organization(org_repo, org_id)
+    if organization and organization.token_owner_user_id == user.id:
         return user
+
+    raise HTTPException(
+        status_code=403,
+        detail="Forbidden: You do not have access to this organization",
+    )
+
+
+async def _find_accessible_organization(
+    org_repository: OrgRepository,
+    org_id: str,
+) -> Organization | None:
+    organization = await org_repository.find_by_login(org_id)
+    if organization or not org_id.isdigit():
+        return organization
+    return await org_repository.find_by_github_id(int(org_id))
+
+
+async def _sync_accessible_accounts(
+    org_repository: OrgRepository,
+    user: User,
+    orgs: list[dict],
+) -> None:
+    accessible_accounts = {
+        user.username: Organization(
+            id=user.username,
+            github_id=user.github_id,
+            name=user.username,
+            login=user.username,
+            github_access_token=user.github_access_token,
+            token_owner_user_id=user.id,
+        )
+    }
+    for org in orgs:
+        accessible_accounts[org["login"]] = Organization(
+            id=org["login"],
+            github_id=org["id"],
+            name=org.get("login") or org.get("name") or org["login"],
+            login=org["login"],
+            github_access_token=user.github_access_token,
+            token_owner_user_id=user.id,
+        )
+
+    await org_repository.save_all(list(accessible_accounts.values()))
 
 
 async def _fetch_user_orgs(

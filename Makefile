@@ -1,4 +1,4 @@
-.PHONY: setup build up down logs switch-env setup-local setup-dev setup-prd deploy-dev deploy-prd build-lambda deploy-lambda deploy-frontend migrate-backend
+.PHONY: setup build up down logs switch-env setup-local setup-dev setup-prd deploy-dev deploy-prd build-lambda deploy-lambda deploy-frontend migrate-backend perf-dev-frontend perf-dev-api
 
 setup: build up
 
@@ -226,4 +226,24 @@ install-hooks:
 
 .PHONY: migrate-backend
 migrate-backend:
-	cd backend && poetry run python scripts/migrate_repo_selection.py
+	cd backend && poetry run python -m app.infrastructure.init_db && poetry run python scripts/migrate_repo_selection.py
+
+.PHONY: perf-dev-frontend
+perf-dev-frontend:
+	@set -a; \
+	if [ -f ".env.dev" ]; then . ./.env.dev; fi; \
+	curl -I -s -o /tmp/version-checker-frontend-headers.txt \
+		-w 'url=%{url_effective}\nnamelookup=%{time_namelookup}\nconnect=%{time_connect}\nappconnect=%{time_appconnect}\nstarttransfer=%{time_starttransfer}\ntotal=%{time_total}\n' \
+		"$$FRONTEND_BASE_URL"; \
+	sed -n '1,20p' /tmp/version-checker-frontend-headers.txt | grep -E '^(HTTP/|x-amz-cf-pop:|x-cache:|server:|content-type:)' || true
+
+.PHONY: perf-dev-api
+perf-dev-api:
+	@set -a; \
+	if [ -f ".env.dev" ]; then . ./.env.dev; fi; \
+	curl -s -o /dev/null \
+		-w 'first starttransfer=%{time_starttransfer} total=%{time_total}\n' \
+		"$$API_GATEWAY_URL/health"; \
+	curl -s -o /dev/null \
+		-w 'second starttransfer=%{time_starttransfer} total=%{time_total}\n' \
+		"$$API_GATEWAY_URL/health"

@@ -804,26 +804,46 @@ describe('Index page', () => {
   it('treats string job counts as numbers when rendering bootstrap progress', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-28T12:00:02'))
-    fetchMock.mockResolvedValue({
-      repository_count: 1,
-      selected_repository_count: 1,
-      repositories: [baseRepository],
-      latest_job: {
-        job_id: 'job-1',
-        org_id: 'octocat',
-        status: 'running',
-        total_repos: '0',
-        completed_repos: '0',
-        failed_repos: '0',
-        started_at: '2026-03-28T12:00:01',
-        finished_at: null,
-        error_message: null,
-        created_at: '2026-03-28T12:00:00',
-        updated_at: '2026-03-28T12:00:01'
-      },
+    fetchMock.mockImplementation((url: string) => {
+      if (url === apiUrl('/scan/orgs/octocat/jobs/job-1')) {
+        return Promise.resolve({
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: '0',
+          completed_repos: '0',
+          failed_repos: '0',
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        })
+      }
+
+      return Promise.resolve({
+        repository_count: 1,
+        selected_repository_count: 1,
+        repositories: [baseRepository],
+        latest_job: {
+          job_id: 'job-1',
+          org_id: 'octocat',
+          status: 'running',
+          total_repos: '0',
+          completed_repos: '0',
+          failed_repos: '0',
+          started_at: '2026-03-28T12:00:01',
+          finished_at: null,
+          error_message: null,
+          created_at: '2026-03-28T12:00:00',
+          updated_at: '2026-03-28T12:00:01'
+        },
+      })
     })
 
     const wrapper = await mountSuspended(IndexHarness)
+    await vi.runAllTicks()
+    await wrapper.vm.$nextTick()
 
     expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
   })
