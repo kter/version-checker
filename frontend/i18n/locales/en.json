@@ -68,6 +68,8 @@
     "sort_repository_asc": "Repository (A to Z)",
     "sort_repository_desc": "Repository (Z to A)",
     "sort_status_priority": "Status (EOL first)",
+    "sort_repository_updated_desc": "Repository updated (newest first)",
+    "sort_repository_updated_asc": "Repository updated (oldest first)",
     "sort_last_scanned_desc": "Last scanned (newest first)",
     "sort_last_scanned_asc": "Last scanned (oldest first)",
     "clear_filters": "Clear Filters",

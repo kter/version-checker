@@ -226,6 +226,7 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
+            updated_at=datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC),
         )
         discovered_new_repo = Repository(
             id="",
@@ -235,6 +236,7 @@ class TestScanRepositoryUseCase:
             org_id="test-org",
             owner_login="test-org",
             default_branch="main",
+            updated_at=datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC),
         )
         saved_new_repo = Repository(
             id="repo-db-2",
@@ -245,6 +247,7 @@ class TestScanRepositoryUseCase:
             owner_login="test-org",
             default_branch="main",
             is_selected=False,
+            updated_at=datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC),
         )
 
         repo_repository = AsyncMock()
@@ -260,7 +263,13 @@ class TestScanRepositoryUseCase:
         ):
             results = await usecase.list_repositories("test-org", "gho_test", "octocat")
 
-        assert results == [existing_repo, saved_new_repo]
+        assert results[0].id == existing_repo.id
+        assert results[0].github_id == existing_repo.github_id
+        assert results[0].full_name == existing_repo.full_name
+        assert results[0].is_selected is True
+        assert results[1] == saved_new_repo
+        assert results[0].updated_at == datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC)
+        assert results[1].updated_at == datetime(2026, 3, 31, 9, 15, 0, tzinfo=UTC)
         repo_repository.find_by_org.assert_awaited_once_with("test-org")
         repo_repository.save.assert_awaited_once()
         saved_repo = repo_repository.save.await_args.args[0]

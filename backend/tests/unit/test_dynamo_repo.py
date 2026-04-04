@@ -46,6 +46,7 @@ class TestDynamoRepoListCacheRepository:
                                 "org_id": "octocat",
                                 "owner_login": "octocat",
                                 "default_branch": "main",
+                                "updated_at": "2026-03-30T09:15:00+00:00",
                             }
                         ]
                     )
@@ -68,6 +69,7 @@ class TestDynamoRepoListCacheRepository:
                 owner_login="octocat",
                 default_branch="main",
                 is_selected=False,
+                updated_at=datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC),
             )
         ]
         client.get_item.assert_awaited_once()
@@ -93,6 +95,7 @@ class TestDynamoRepoListCacheRepository:
                     owner_login="octocat",
                     default_branch="main",
                     is_selected=True,
+                    updated_at=datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC),
                 )
             ],
         )
@@ -106,6 +109,12 @@ class TestDynamoRepoListCacheRepository:
                 "full_name"
             ]
             == "octocat/app"
+        )
+        assert (
+            json.loads(put_item_kwargs["Item"]["repositories_json"]["S"])[0][
+                "updated_at"
+            ]
+            == "2026-03-30T09:15:00+00:00"
         )
         assert int(put_item_kwargs["Item"]["expires_at"]["N"]) > int(
             datetime.now(UTC).timestamp()

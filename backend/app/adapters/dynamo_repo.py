@@ -121,6 +121,11 @@ class DynamoRepoListCacheRepository(IRepoListCacheRepository):
                 owner_login=repository.get("owner_login", ""),
                 default_branch=repository.get("default_branch") or "main",
                 is_selected=False,
+                updated_at=(
+                    datetime.fromisoformat(repository["updated_at"])
+                    if repository.get("updated_at")
+                    else None
+                ),
             )
             for repository in repositories
         ]
@@ -143,6 +148,11 @@ class DynamoRepoListCacheRepository(IRepoListCacheRepository):
                     "org_id": repository.org_id,
                     "owner_login": repository.owner_login,
                     "default_branch": repository.default_branch,
+                    "updated_at": (
+                        repository.updated_at.isoformat()
+                        if repository.updated_at
+                        else None
+                    ),
                 }
                 for repository in repositories
             ],

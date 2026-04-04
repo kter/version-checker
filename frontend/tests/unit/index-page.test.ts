@@ -65,6 +65,7 @@ const IndexStateResetHarness = defineComponent({
 const baseRepository = {
   repository_id: 'repo-1',
   repo_id: 'octocat/app',
+  repository_updated_at: null,
   is_selected: true,
   detected_item_count: 0,
   detected_items: [],
@@ -530,6 +531,7 @@ describe('Index page', () => {
           ...baseRepository,
           repository_id: 'repo-1',
           repo_id: 'octocat/worker',
+          repository_updated_at: '2026-03-28T13:00:10+00:00',
           framework: 'FastAPI',
           version: '0.110.0',
           is_eol: false,
@@ -539,6 +541,7 @@ describe('Index page', () => {
           ...baseRepository,
           repository_id: 'repo-2',
           repo_id: 'octocat/app',
+          repository_updated_at: '2026-03-27T13:00:10+00:00',
           framework: 'Rails',
           version: '6.1',
           is_eol: true,
@@ -548,6 +551,7 @@ describe('Index page', () => {
           ...baseRepository,
           repository_id: 'repo-3',
           repo_id: 'octocat/docs',
+          repository_updated_at: null,
           framework: null,
           version: null,
           is_eol: null,
@@ -557,6 +561,7 @@ describe('Index page', () => {
           ...baseRepository,
           repository_id: 'repo-4',
           repo_id: 'octocat/api',
+          repository_updated_at: '2026-03-29T13:00:10+00:00',
           framework: 'Nuxt',
           version: '3.16.0',
           is_eol: false,
@@ -594,6 +599,26 @@ describe('Index page', () => {
       'octocat/docs',
       'octocat/api',
       'octocat/worker'
+    ])
+
+    await sortSelect.setValue('repository_updated_desc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/api',
+      'octocat/worker',
+      'octocat/app',
+      'octocat/docs'
+    ])
+
+    await sortSelect.setValue('repository_updated_asc')
+    await wrapper.vm.$nextTick()
+
+    expect(getRenderedRepositoryNames(wrapper)).toEqual([
+      'octocat/app',
+      'octocat/worker',
+      'octocat/api',
+      'octocat/docs'
     ])
 
     await sortSelect.setValue('last_scanned_desc')

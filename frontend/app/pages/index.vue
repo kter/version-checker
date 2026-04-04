@@ -423,6 +423,8 @@ const sortOptions = computed(() => [
   { value: 'repository_asc', label: t('sort_repository_asc') },
   { value: 'repository_desc', label: t('sort_repository_desc') },
   { value: 'status_priority', label: t('sort_status_priority') },
+  { value: 'repository_updated_desc', label: t('sort_repository_updated_desc') },
+  { value: 'repository_updated_asc', label: t('sort_repository_updated_asc') },
   { value: 'last_scanned_desc', label: t('sort_last_scanned_desc') },
   { value: 'last_scanned_asc', label: t('sort_last_scanned_asc') }
 ])
@@ -782,6 +784,10 @@ function compareRepositories(leftRepo, rightRepo) {
       return compareText(rightRepo.repo_id, leftRepo.repo_id)
     case 'status_priority':
       return compareRepositoryStatus(leftRepo, rightRepo)
+    case 'repository_updated_desc':
+      return compareRepositoryUpdatedAt(leftRepo, rightRepo, 'desc')
+    case 'repository_updated_asc':
+      return compareRepositoryUpdatedAt(leftRepo, rightRepo, 'asc')
     case 'last_scanned_desc':
       return compareLastScanned(leftRepo, rightRepo, 'desc')
     case 'last_scanned_asc':
@@ -808,6 +814,16 @@ function compareRepositoryStatus(leftRepo, rightRepo) {
 function compareLastScanned(leftRepo, rightRepo, direction) {
   const leftTimestamp = parseSortableTimestamp(leftRepo.last_scanned_at)
   const rightTimestamp = parseSortableTimestamp(rightRepo.last_scanned_at)
+  return compareTimestampWithFallback(leftRepo, rightRepo, leftTimestamp, rightTimestamp, direction)
+}
+
+function compareRepositoryUpdatedAt(leftRepo, rightRepo, direction) {
+  const leftTimestamp = parseSortableTimestamp(leftRepo.repository_updated_at)
+  const rightTimestamp = parseSortableTimestamp(rightRepo.repository_updated_at)
+  return compareTimestampWithFallback(leftRepo, rightRepo, leftTimestamp, rightTimestamp, direction)
+}
+
+function compareTimestampWithFallback(leftRepo, rightRepo, leftTimestamp, rightTimestamp, direction) {
   const leftIsValid = leftTimestamp !== null
   const rightIsValid = rightTimestamp !== null
 

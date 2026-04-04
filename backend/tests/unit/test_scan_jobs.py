@@ -45,6 +45,7 @@ class TestScanJobService:
                 owner_login="octocat",
                 default_branch="main",
                 is_selected=True,
+                updated_at=datetime(2026, 3, 30, 9, 15, 0, tzinfo=UTC),
             )
         ]
         scanner_usecase.get_saved_results.return_value = []
@@ -62,6 +63,10 @@ class TestScanJobService:
         result = await service.get_scan_results("octocat", "gho_test", "octocat")
 
         assert result["repository_count"] == 1
+        assert (
+            result["repositories"][0]["repository_updated_at"]
+            == "2026-03-30T09:15:00+00:00"
+        )
         scanner_usecase.list_repositories.assert_awaited_once_with(
             "octocat",
             "gho_test",

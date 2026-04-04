@@ -175,6 +175,12 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(f"{value}T00:00:00")
 
 
+def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
@@ -314,6 +320,7 @@ class GitHubClient:
             org_id=owner_login,
             owner_login=item["owner"]["login"],
             default_branch=item.get("default_branch") or "main",
+            updated_at=_parse_datetime(item.get("updated_at")),
         )
 
     async def _request(self, method: str, url: str, **kwargs) -> Any:
@@ -924,11 +931,14 @@ class ScanRepositoryUseCase:
                 repo.id = existing.id
                 repo.is_selected = existing.is_selected
                 if _repositories_match(existing, repo):
-                    persisted_repositories.append(existing)
+                    persisted_repositories.append(repo)
                     continue
             else:
                 repo.is_selected = False
-            persisted_repositories.append(await self.repo_repository.save(repo))
+            saved_repo = await self.repo_repository.save(repo)
+            repo.id = saved_repo.id
+            repo.is_selected = saved_repo.is_selected
+            persisted_repositories.append(repo)
 
         return persisted_repositories
 

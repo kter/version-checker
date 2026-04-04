@@ -599,6 +599,7 @@ def _serialize_repository(repo, statuses) -> Dict[str, Any]:
     return {
         "repository_id": repo.id,
         "repo_id": repo.full_name,
+        "repository_updated_at": _serialize_utc_datetime(repo.updated_at),
         "is_selected": repo.is_selected,
         "detected_item_count": len(sorted_statuses),
         "detected_items": [

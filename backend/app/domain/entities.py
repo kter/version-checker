@@ -48,6 +48,7 @@ class Repository:
     owner_login: str = ""
     default_branch: str = "main"
     is_selected: bool = True
+    updated_at: Optional[datetime] = None
 
 
 @dataclass

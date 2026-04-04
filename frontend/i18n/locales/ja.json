@@ -68,6 +68,8 @@
     "sort_repository_asc": "リポジトリ名 昇順",
     "sort_repository_desc": "リポジトリ名 降順",
     "sort_status_priority": "ステータス順（EOL優先）",
+    "sort_repository_updated_desc": "リポジトリ更新日が新しい順",
+    "sort_repository_updated_asc": "リポジトリ更新日が古い順",
     "sort_last_scanned_desc": "最終スキャンが新しい順",
     "sort_last_scanned_asc": "最終スキャンが古い順",
     "clear_filters": "フィルタをクリア",
