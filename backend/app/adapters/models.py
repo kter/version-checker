@@ -1,5 +1,5 @@
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import Column, String, Integer, DateTime, Boolean
+from sqlalchemy import Column, String, Integer, DateTime, Boolean, Index
 from datetime import datetime
 from app.domain.entities import (
     User,
@@ -7,6 +7,7 @@ from app.domain.entities import (
     Organization,
     EolStatus,
     ScanJob,
+    ScanJobRepoProgress,
     TokenUsageEvent,
 )
 
@@ -138,6 +139,31 @@ class ScanJobModel(Base):
             failed_repos=self.failed_repos,
             started_at=self.started_at,
             finished_at=self.finished_at,
+            error_message=self.error_message,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+
+class ScanJobRepoProgressModel(Base):
+    __tablename__ = "scan_job_repo_progress"
+    __table_args__ = (
+        Index("ix_scan_job_repo_progress_job_id", "job_id"),
+        Index("ix_scan_job_repo_progress_job_id_status", "job_id", "status"),
+    )
+
+    job_id = Column(String, primary_key=True)
+    repo_id = Column(String, primary_key=True)
+    status = Column(String, nullable=False)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def to_domain(self) -> ScanJobRepoProgress:
+        return ScanJobRepoProgress(
+            job_id=self.job_id,
+            repo_id=self.repo_id,
+            status=self.status,
             error_message=self.error_message,
             created_at=self.created_at,
             updated_at=self.updated_at,

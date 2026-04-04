@@ -1,6 +1,6 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, update, desc, func
+from sqlalchemy import case, desc, delete, func, select, update
 import uuid
 from app.domain.interfaces import (
     IUserRepository,
@@ -12,7 +12,11 @@ from app.domain.interfaces import (
 )
 from app.domain.entities import (
     ACTIVE_SCAN_JOB_STATUSES,
+    SCAN_JOB_REPO_STATUS_COMPLETED,
+    SCAN_JOB_REPO_STATUS_FAILED,
+    SCAN_JOB_REPO_STATUS_PENDING,
     SCAN_JOB_STATUS_COMPLETED,
+    ScanJobRepoProgress,
     User,
     Organization,
     Repository,
@@ -26,6 +30,7 @@ from app.adapters.models import (
     RepoModel,
     EolStatusModel,
     ScanJobModel,
+    ScanJobRepoProgressModel,
     TokenUsageEventModel,
 )
 from datetime import UTC, datetime
@@ -297,33 +302,129 @@ class ScanJobRepository(IScanJobRepository):
         await self.session.flush()
         return model.to_domain()
 
-    async def find_by_id(self, job_id: str) -> Optional[ScanJob]:
-        result = await self.session.execute(
-            select(ScanJobModel).where(ScanJobModel.id == job_id)
+    def _progress_summary_subquery(self):
+        return (
+            select(
+                ScanJobRepoProgressModel.job_id.label("job_id"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                ScanJobRepoProgressModel.status
+                                == SCAN_JOB_REPO_STATUS_COMPLETED,
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("completed_repos"),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                ScanJobRepoProgressModel.status
+                                == SCAN_JOB_REPO_STATUS_FAILED,
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ).label("failed_repos"),
+            )
+            .group_by(ScanJobRepoProgressModel.job_id)
+            .subquery()
         )
-        model = result.scalar_one_or_none()
-        return model.to_domain() if model else None
+
+    def _scan_job_query(self):
+        progress_summary = self._progress_summary_subquery()
+        return select(
+            ScanJobModel,
+            func.coalesce(
+                progress_summary.c.completed_repos,
+                ScanJobModel.completed_repos,
+            ).label("completed_repos"),
+            func.coalesce(
+                progress_summary.c.failed_repos,
+                ScanJobModel.failed_repos,
+            ).label("failed_repos"),
+        ).outerjoin(progress_summary, progress_summary.c.job_id == ScanJobModel.id)
+
+    def _to_scan_job(
+        self,
+        model: ScanJobModel,
+        completed_repos: Optional[int],
+        failed_repos: Optional[int],
+    ) -> ScanJob:
+        job = model.to_domain()
+        job.completed_repos = int(completed_repos or 0)
+        job.failed_repos = int(failed_repos or 0)
+        return job
+
+    async def _fetch_scan_job(self, statement) -> Optional[ScanJob]:
+        result = await self.session.execute(statement)
+        row = result.first()
+        if not row:
+            return None
+        model, completed_repos, failed_repos = row
+        return self._to_scan_job(model, completed_repos, failed_repos)
+
+    async def _get_progress_counts(self, job_id: str) -> tuple[int, int]:
+        result = await self.session.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                ScanJobRepoProgressModel.status
+                                == SCAN_JOB_REPO_STATUS_COMPLETED,
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                ScanJobRepoProgressModel.status
+                                == SCAN_JOB_REPO_STATUS_FAILED,
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(ScanJobRepoProgressModel.job_id == job_id)
+        )
+        completed_repos, failed_repos = result.one()
+        return int(completed_repos or 0), int(failed_repos or 0)
+
+    async def find_by_id(self, job_id: str) -> Optional[ScanJob]:
+        return await self._fetch_scan_job(
+            self._scan_job_query().where(ScanJobModel.id == job_id)
+        )
 
     async def find_latest_by_org(self, org_id: str) -> Optional[ScanJob]:
-        result = await self.session.execute(
-            select(ScanJobModel)
+        return await self._fetch_scan_job(
+            self._scan_job_query()
             .where(ScanJobModel.org_id == org_id)
             .order_by(desc(ScanJobModel.created_at))
             .limit(1)
         )
-        model = result.scalar_one_or_none()
-        return model.to_domain() if model else None
 
     async def find_active_by_org(self, org_id: str) -> Optional[ScanJob]:
-        result = await self.session.execute(
-            select(ScanJobModel)
+        return await self._fetch_scan_job(
+            self._scan_job_query()
             .where(ScanJobModel.org_id == org_id)
             .where(ScanJobModel.status.in_(ACTIVE_SCAN_JOB_STATUSES))
             .order_by(desc(ScanJobModel.created_at))
             .limit(1)
         )
-        model = result.scalar_one_or_none()
-        return model.to_domain() if model else None
 
     async def start(self, job_id: str, total_repos: int) -> Optional[ScanJob]:
         now = _utcnow_naive()
@@ -333,7 +434,10 @@ class ScanJobRepository(IScanJobRepository):
             .values(
                 status="running",
                 total_repos=total_repos,
+                completed_repos=0,
+                failed_repos=0,
                 started_at=now,
+                finished_at=None,
                 updated_at=now,
                 error_message=None,
             )
@@ -344,48 +448,109 @@ class ScanJobRepository(IScanJobRepository):
     async def mark_completed(self, job_id: str) -> Optional[ScanJob]:
         return await self.finalize(job_id, SCAN_JOB_STATUS_COMPLETED)
 
-    async def record_repo_success(self, job_id: str) -> Optional[ScanJob]:
+    async def seed_repo_progress(self, job_id: str, repo_ids: List[str]) -> None:
+        if not repo_ids:
+            return
+
         now = _utcnow_naive()
-        await self.session.execute(
-            update(ScanJobModel)
-            .where(ScanJobModel.id == job_id)
+        existing = await self.session.execute(
+            select(ScanJobRepoProgressModel.repo_id).where(
+                ScanJobRepoProgressModel.job_id == job_id,
+                ScanJobRepoProgressModel.repo_id.in_(repo_ids),
+            )
+        )
+        existing_repo_ids = set(existing.scalars().all())
+
+        for repo_id in repo_ids:
+            if repo_id in existing_repo_ids:
+                continue
+            self.session.add(
+                ScanJobRepoProgressModel(
+                    job_id=job_id,
+                    repo_id=repo_id,
+                    status=SCAN_JOB_REPO_STATUS_PENDING,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        await self.session.flush()
+
+    async def find_repo_progress(
+        self, job_id: str, repo_id: str
+    ) -> Optional[ScanJobRepoProgress]:
+        result = await self.session.execute(
+            select(ScanJobRepoProgressModel).where(
+                ScanJobRepoProgressModel.job_id == job_id,
+                ScanJobRepoProgressModel.repo_id == repo_id,
+            )
+        )
+        model = result.scalar_one_or_none()
+        return model.to_domain() if model else None
+
+    async def record_repo_success(self, job_id: str, repo_id: str) -> Optional[ScanJob]:
+        now = _utcnow_naive()
+        progress_update = await self.session.execute(
+            update(ScanJobRepoProgressModel)
+            .where(ScanJobRepoProgressModel.job_id == job_id)
+            .where(ScanJobRepoProgressModel.repo_id == repo_id)
+            .where(ScanJobRepoProgressModel.status == SCAN_JOB_REPO_STATUS_PENDING)
             .values(
-                completed_repos=ScanJobModel.completed_repos + 1,
+                status=SCAN_JOB_REPO_STATUS_COMPLETED,
+                error_message=None,
                 updated_at=now,
             )
         )
-        await self.session.flush()
+        if progress_update.rowcount:
+            await self.session.execute(
+                update(ScanJobModel)
+                .where(ScanJobModel.id == job_id)
+                .values(updated_at=now)
+            )
+            await self.session.flush()
         return await self.find_by_id(job_id)
 
     async def record_repo_failure(
-        self, job_id: str, error_message: Optional[str]
+        self, job_id: str, repo_id: str, error_message: Optional[str]
     ) -> Optional[ScanJob]:
         now = _utcnow_naive()
-        values = {
-            "failed_repos": ScanJobModel.failed_repos + 1,
-            "updated_at": now,
-        }
-        if error_message is not None:
-            values["error_message"] = error_message
-        await self.session.execute(
-            update(ScanJobModel).where(ScanJobModel.id == job_id).values(**values)
+        progress_update = await self.session.execute(
+            update(ScanJobRepoProgressModel)
+            .where(ScanJobRepoProgressModel.job_id == job_id)
+            .where(ScanJobRepoProgressModel.repo_id == repo_id)
+            .where(ScanJobRepoProgressModel.status == SCAN_JOB_REPO_STATUS_PENDING)
+            .values(
+                status=SCAN_JOB_REPO_STATUS_FAILED,
+                error_message=error_message,
+                updated_at=now,
+            )
         )
-        await self.session.flush()
+        if progress_update.rowcount:
+            await self.session.execute(
+                update(ScanJobModel)
+                .where(ScanJobModel.id == job_id)
+                .values(updated_at=now, error_message=error_message)
+            )
+            await self.session.flush()
         return await self.find_by_id(job_id)
 
     async def finalize(
         self, job_id: str, status: str, error_message: Optional[str] = None
     ) -> Optional[ScanJob]:
         now = _utcnow_naive()
+        completed_repos, failed_repos = await self._get_progress_counts(job_id)
         values = {
             "status": status,
+            "completed_repos": completed_repos,
+            "failed_repos": failed_repos,
             "finished_at": now,
             "updated_at": now,
+            "error_message": error_message,
         }
-        if error_message is not None:
-            values["error_message"] = error_message
         await self.session.execute(
-            update(ScanJobModel).where(ScanJobModel.id == job_id).values(**values)
+            update(ScanJobModel)
+            .where(ScanJobModel.id == job_id)
+            .where(ScanJobModel.status.in_(ACTIVE_SCAN_JOB_STATUSES))
+            .values(**values)
         )
         await self.session.flush()
         return await self.find_by_id(job_id)

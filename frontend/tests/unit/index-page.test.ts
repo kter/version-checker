@@ -42,6 +42,7 @@ const IndexHarness = defineComponent({
     auth.setAuth('token-1', 'octocat', [{ id: 1, login: 'octocat' }])
     return {
       ...auth,
+      ...useMonthlyTokenUsage(),
       ...useScanJob(),
     }
   },
@@ -60,6 +61,21 @@ const IndexStateResetHarness = defineComponent({
 
     return () => null
   },
+})
+
+const ScanJobUsageHarness = defineComponent({
+  setup() {
+    const monthlyUsage = useMonthlyTokenUsage()
+    const scanJob = useScanJob()
+    monthlyUsage.clear()
+    scanJob.resetState()
+
+    return {
+      ...monthlyUsage,
+      ...scanJob,
+    }
+  },
+  template: '<div />',
 })
 
 const baseRepository = {
@@ -799,6 +815,28 @@ describe('Index page', () => {
     ])
     expect(wrapper.vm.scanJobStatusLabel).toBe('Scan job queued')
     expect(wrapper.vm.scanJobDetailLabel).toBe('Preparing repository scan...')
+  })
+
+  it('updates monthly token usage state from scan job payload snapshots', async () => {
+    const wrapper = await mountSuspended(ScanJobUsageHarness)
+
+    wrapper.vm.syncJobState({
+      job_id: 'job-1',
+      org_id: 'octocat',
+      status: 'running',
+      total_repos: 3,
+      completed_repos: 1,
+      failed_repos: 0,
+      started_at: '2026-03-28T12:00:01',
+      finished_at: null,
+      error_message: null,
+      created_at: '2026-03-28T12:00:00',
+      updated_at: '2026-03-28T12:00:03',
+      current_month_total_tokens: 201,
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.totalTokens).toBe(201)
   })
 
   it('treats string job counts as numbers when rendering bootstrap progress', async () => {

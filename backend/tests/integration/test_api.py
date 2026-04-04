@@ -255,6 +255,10 @@ class TestScanEndpoints:
         from app.api.auth_deps import verify_org_access
         from app.api.routes.scan import get_scan_job_service
 
+        mock_usage_result = MagicMock()
+        mock_usage_result.scalar.return_value = 3456
+        mock_db_session.execute = AsyncMock(return_value=mock_usage_result)
+
         fake_service = MagicMock()
         fake_service.enqueue_scan = AsyncMock(
             return_value=ScanJob(
@@ -298,12 +302,17 @@ class TestScanEndpoints:
             "error_message": None,
             "created_at": "2026-03-28T12:00:00+00:00",
             "updated_at": "2026-03-28T12:00:00+00:00",
+            "current_month_total_tokens": 3456,
         }
 
     @pytest.mark.asyncio
     async def test_get_scan_job_status(self, app_with_mocks, mock_db_session):
         from app.api.auth_deps import verify_org_access
         from app.api.routes.scan import get_scan_job_service
+
+        mock_usage_result = MagicMock()
+        mock_usage_result.scalar.return_value = 4567
+        mock_db_session.execute = AsyncMock(return_value=mock_usage_result)
 
         fake_service = MagicMock()
         fake_service.get_job = AsyncMock(
@@ -349,6 +358,7 @@ class TestScanEndpoints:
             "error_message": None,
             "created_at": "2026-03-28T11:59:55+00:00",
             "updated_at": "2026-03-28T12:00:05+00:00",
+            "current_month_total_tokens": 4567,
         }
 
 

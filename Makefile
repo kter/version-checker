@@ -136,6 +136,10 @@ test-unit: test-unit-backend test-unit-frontend
 test-unit-backend:
 	cd backend && poetry run pytest tests/unit
 
+.PHONY: test-unit-backend-scan-jobs
+test-unit-backend-scan-jobs:
+	cd backend && poetry run pytest tests/unit/test_scan_jobs.py tests/unit/test_entities.py tests/unit/test_models.py
+
 .PHONY: test-unit-frontend
 test-unit-frontend:
 	cd frontend && npm run test:unit

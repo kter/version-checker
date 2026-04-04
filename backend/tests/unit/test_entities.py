@@ -7,6 +7,7 @@ from app.domain.entities import (
     Organization,
     Repository,
     ScanJob,
+    ScanJobRepoProgress,
     TokenUsageEvent,
     User,
 )
@@ -122,6 +123,18 @@ class TestScanJob:
         assert job.failed_repos == 0
         assert isinstance(job.created_at, datetime)
         assert isinstance(job.updated_at, datetime)
+
+
+class TestScanJobRepoProgress:
+    def test_create_scan_job_repo_progress_with_defaults(self):
+        progress = ScanJobRepoProgress(job_id="job-1", repo_id="repo-1")
+
+        assert progress.job_id == "job-1"
+        assert progress.repo_id == "repo-1"
+        assert progress.status == "pending"
+        assert progress.error_message is None
+        assert isinstance(progress.created_at, datetime)
+        assert isinstance(progress.updated_at, datetime)
 
 
 class TestTokenUsageEvent:

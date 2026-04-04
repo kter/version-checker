@@ -8,6 +8,7 @@ import httpx
 
 from app.domain.entities import (
     ACTIVE_SCAN_JOB_STATUSES,
+    TERMINAL_SCAN_JOB_REPO_STATUSES,
     SCAN_JOB_STATUS_COMPLETED,
     SCAN_JOB_STATUS_FAILED,
     SCAN_JOB_STATUS_PARTIAL_FAILED,
@@ -42,6 +43,17 @@ SCAN_JOB_QUEUE_STALE_AFTER = timedelta(minutes=5)
 SCAN_JOB_BOOTSTRAP_STALE_AFTER = timedelta(minutes=3)
 SCAN_JOB_PROGRESS_STALE_AFTER = timedelta(minutes=15)
 SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS = 90
+SCAN_JOB_SERIALIZATION_RETRY_ATTEMPTS = 3
+SCAN_JOB_SERIALIZATION_RETRY_DELAY_SECONDS = 0.2
+
+
+class ScanJobSerializationRetryExhaustedError(RuntimeError):
+    def __init__(self, operation_name: str, original_error: Exception):
+        self.operation_name = operation_name
+        self.original_error = original_error
+        super().__init__(
+            f"{operation_name} failed after serialization retries: {original_error}"
+        )
 
 
 class ScanJobService:
@@ -127,7 +139,7 @@ class ScanJobService:
             )
         except Exception:
             logger.exception("Failed to enqueue scan bootstrap for %s", org_id)
-            await self.scan_job_repository.finalize(
+            await self._finalize_job(
                 created_job.id,
                 SCAN_JOB_STATUS_FAILED,
                 "Failed to enqueue scan bootstrap job",
@@ -232,10 +244,18 @@ class ScanJobService:
     ) -> Optional[ScanJob]:
         if not job or not _is_scan_job_stale(job):
             return job
-        return await self.scan_job_repository.finalize(
+        return await self._finalize_job(
             job.id,
             SCAN_JOB_STATUS_FAILED,
             _get_scan_job_stalled_error_message(job),
+        )
+
+    async def _finalize_job(
+        self, job_id: str, status: str, error_message: Optional[str] = None
+    ) -> Optional[ScanJob]:
+        return await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.finalize(job_id, status, error_message),
+            operation_name=f"finalize scan job {job_id}",
         )
 
 
@@ -281,10 +301,12 @@ class ScanJobWorkerService:
         job = await self.scan_job_repository.find_by_id(job_id)
         if not job or job.status not in ACTIVE_SCAN_JOB_STATUSES:
             return
+        if job.status == "running" and job.total_repos > 0:
+            return
 
         organization = await self.org_repository.find_by_login(org_id)
         if not organization:
-            await self.scan_job_repository.finalize(
+            await self._finalize_job(
                 job_id,
                 SCAN_JOB_STATUS_FAILED,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
@@ -298,17 +320,19 @@ class ScanJobWorkerService:
                 job.requested_by,
             )
         except GitHubAuthorizationExpiredError:
-            await self.scan_job_repository.finalize(
+            await self._finalize_job(
                 job_id,
                 SCAN_JOB_STATUS_FAILED,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
             )
             return
         selected_repos = [repo for repo in repos if repo.is_selected]
-        await self.scan_job_repository.start(job_id, len(selected_repos))
+        selected_repo_ids = [repo.id for repo in selected_repos]
+        await self._seed_repo_progress(job_id, selected_repo_ids)
+        await self._start_job(job_id, len(selected_repo_ids))
 
         if not selected_repos:
-            await self.scan_job_repository.mark_completed(job_id)
+            await self._mark_job_completed(job_id)
             return
 
         repo_messages = [
@@ -327,7 +351,7 @@ class ScanJobWorkerService:
             logger.exception(
                 "Failed to enqueue repository scan messages for %s", org_id
             )
-            await self.scan_job_repository.finalize(
+            await self._finalize_job(
                 job_id,
                 SCAN_JOB_STATUS_FAILED,
                 f"Failed to enqueue repository scan messages: {exc}",
@@ -339,11 +363,25 @@ class ScanJobWorkerService:
         job = await self.scan_job_repository.find_by_id(job_id)
         if not job or job.status not in ACTIVE_SCAN_JOB_STATUSES:
             return
+        repo_progress = await self.scan_job_repository.find_repo_progress(
+            job_id, repo_id
+        )
+        if repo_progress and repo_progress.status in TERMINAL_SCAN_JOB_REPO_STATUSES:
+            await self._finalize_current_job_if_ready(job_id)
+            return
+        if not repo_progress:
+            await self._finalize_job(
+                job_id,
+                SCAN_JOB_STATUS_FAILED,
+                f"Repository progress not found for {repo_id}",
+            )
+            return
 
         organization = await self.org_repository.find_by_login(org_id)
         if not organization:
-            updated_job = await self.scan_job_repository.record_repo_failure(
+            updated_job = await self._record_repo_failure(
                 job_id,
+                repo_id,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
             )
             await self._finalize_if_ready(updated_job)
@@ -351,8 +389,10 @@ class ScanJobWorkerService:
 
         repository = await self.repo_repository.find_by_id(repo_id)
         if not repository:
-            updated_job = await self.scan_job_repository.record_repo_failure(
-                job_id, f"Repository not found: {repo_id}"
+            updated_job = await self._record_repo_failure(
+                job_id,
+                repo_id,
+                f"Repository not found: {repo_id}",
             )
             await self._finalize_if_ready(updated_job)
             return
@@ -366,23 +406,30 @@ class ScanJobWorkerService:
                     access_token,
                 )
             await self.eol_status_repository.replace_for_repo(repository.id, statuses)
-            updated_job = await self.scan_job_repository.record_repo_success(job_id)
-        except GitHubAuthorizationExpiredError:
-            updated_job = await self.scan_job_repository.record_repo_failure(
+            updated_job = await self._record_repo_success(
                 job_id,
+                repo_id,
+                repository.full_name,
+            )
+        except GitHubAuthorizationExpiredError:
+            updated_job = await self._record_repo_failure(
+                job_id,
+                repo_id,
                 GITHUB_REAUTH_REQUIRED_DETAIL,
             )
         except TimeoutError:
-            updated_job = await self.scan_job_repository.record_repo_failure(
+            updated_job = await self._record_repo_failure(
                 job_id,
+                repo_id,
                 "Repository scan timed out for "
                 f"{repository.full_name} after "
                 f"{SCAN_JOB_REPOSITORY_TIMEOUT_SECONDS} seconds",
             )
         except Exception as exc:
             logger.exception("Failed to scan repository %s", repository.full_name)
-            updated_job = await self.scan_job_repository.record_repo_failure(
+            updated_job = await self._record_repo_failure(
                 job_id,
+                repo_id,
                 f"Repository scan failed for {repository.full_name}: {exc}",
             )
 
@@ -397,22 +444,83 @@ class ScanJobWorkerService:
             return
 
         if job.failed_repos == 0:
-            await self.scan_job_repository.finalize(job.id, SCAN_JOB_STATUS_COMPLETED)
+            await self._finalize_job(job.id, SCAN_JOB_STATUS_COMPLETED)
             return
 
         error_message = _build_failure_summary(job)
         if job.completed_repos == 0:
-            await self.scan_job_repository.finalize(
+            await self._finalize_job(
                 job.id,
                 SCAN_JOB_STATUS_FAILED,
                 error_message,
             )
             return
 
-        await self.scan_job_repository.finalize(
+        await self._finalize_job(
             job.id,
             SCAN_JOB_STATUS_PARTIAL_FAILED,
             error_message,
+        )
+
+    async def _start_job(self, job_id: str, total_repos: int) -> Optional[ScanJob]:
+        return await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.start(job_id, total_repos),
+            operation_name=f"start scan job {job_id}",
+        )
+
+    async def _mark_job_completed(self, job_id: str) -> Optional[ScanJob]:
+        return await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.mark_completed(job_id),
+            operation_name=f"complete scan job {job_id}",
+        )
+
+    async def _seed_repo_progress(self, job_id: str, repo_ids: List[str]) -> None:
+        await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.seed_repo_progress(job_id, repo_ids),
+            operation_name=f"seed scan job progress {job_id}",
+        )
+
+    async def _record_repo_success(
+        self, job_id: str, repo_id: str, repository_full_name: str
+    ) -> Optional[ScanJob]:
+        try:
+            return await _run_with_serialization_retry(
+                lambda: self.scan_job_repository.record_repo_success(job_id, repo_id),
+                operation_name=f"record success for {repository_full_name}",
+            )
+        except ScanJobSerializationRetryExhaustedError as exc:
+            logger.warning(
+                "Falling back to failure progress for %s after serialization retries",
+                repository_full_name,
+            )
+            return await self._record_repo_failure(
+                job_id,
+                repo_id,
+                "Repository scan bookkeeping failed for "
+                f"{repository_full_name}: {exc.original_error}",
+            )
+
+    async def _record_repo_failure(
+        self, job_id: str, repo_id: str, error_message: str
+    ) -> Optional[ScanJob]:
+        return await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.record_repo_failure(
+                job_id,
+                repo_id,
+                error_message,
+            ),
+            operation_name=f"record failure for {job_id}/{repo_id}",
+        )
+
+    async def _finalize_current_job_if_ready(self, job_id: str) -> None:
+        await self._finalize_if_ready(await self.scan_job_repository.find_by_id(job_id))
+
+    async def _finalize_job(
+        self, job_id: str, status: str, error_message: Optional[str] = None
+    ) -> Optional[ScanJob]:
+        return await _run_with_serialization_retry(
+            lambda: self.scan_job_repository.finalize(job_id, status, error_message),
+            operation_name=f"finalize scan job {job_id}",
         )
 
     async def _list_repositories_for_organization(
@@ -506,6 +614,42 @@ def serialize_scan_job(job: Optional[ScanJob]) -> Optional[Dict[str, Any]]:
         "created_at": _serialize_utc_datetime(job.created_at),
         "updated_at": _serialize_utc_datetime(job.updated_at),
     }
+
+
+async def _run_with_serialization_retry(operation, operation_name: str):
+    last_error = None
+    for attempt in range(1, SCAN_JOB_SERIALIZATION_RETRY_ATTEMPTS + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            if not _is_retryable_serialization_error(exc):
+                raise
+            last_error = exc
+            if attempt == SCAN_JOB_SERIALIZATION_RETRY_ATTEMPTS:
+                break
+            logger.warning(
+                "Retrying %s after serialization conflict (%s/%s)",
+                operation_name,
+                attempt,
+                SCAN_JOB_SERIALIZATION_RETRY_ATTEMPTS,
+            )
+            await asyncio.sleep(SCAN_JOB_SERIALIZATION_RETRY_DELAY_SECONDS * attempt)
+
+    raise ScanJobSerializationRetryExhaustedError(
+        operation_name,
+        last_error or RuntimeError("unknown serialization failure"),
+    )
+
+
+def _is_retryable_serialization_error(exc: Exception) -> bool:
+    message = str(exc)
+    if "SerializationError" in message:
+        return True
+    if "please retry" in message:
+        return True
+    if "40001" in message or "OC000" in message:
+        return True
+    return False
 
 
 def _utcnow_naive() -> datetime:

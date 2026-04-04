@@ -6,6 +6,7 @@ from app.domain.entities import (
     EolStatus,
     Organization,
     ScanJob,
+    ScanJobRepoProgress,
     TokenUsageEvent,
 )
 
@@ -134,12 +135,22 @@ class IScanJobRepository(ABC):
         pass
 
     @abstractmethod
-    async def record_repo_success(self, job_id: str) -> Optional[ScanJob]:
+    async def seed_repo_progress(self, job_id: str, repo_ids: List[str]) -> None:
+        pass
+
+    @abstractmethod
+    async def find_repo_progress(
+        self, job_id: str, repo_id: str
+    ) -> Optional[ScanJobRepoProgress]:
+        pass
+
+    @abstractmethod
+    async def record_repo_success(self, job_id: str, repo_id: str) -> Optional[ScanJob]:
         pass
 
     @abstractmethod
     async def record_repo_failure(
-        self, job_id: str, error_message: Optional[str]
+        self, job_id: str, repo_id: str, error_message: Optional[str]
     ) -> Optional[ScanJob]:
         pass
 

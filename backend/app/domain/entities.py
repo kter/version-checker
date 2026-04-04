@@ -8,9 +8,18 @@ SCAN_JOB_STATUS_COMPLETED = "completed"
 SCAN_JOB_STATUS_PARTIAL_FAILED = "partial_failed"
 SCAN_JOB_STATUS_FAILED = "failed"
 
+SCAN_JOB_REPO_STATUS_PENDING = "pending"
+SCAN_JOB_REPO_STATUS_COMPLETED = "completed"
+SCAN_JOB_REPO_STATUS_FAILED = "failed"
+
 ACTIVE_SCAN_JOB_STATUSES = {
     SCAN_JOB_STATUS_QUEUED,
     SCAN_JOB_STATUS_RUNNING,
+}
+
+TERMINAL_SCAN_JOB_REPO_STATUSES = {
+    SCAN_JOB_REPO_STATUS_COMPLETED,
+    SCAN_JOB_REPO_STATUS_FAILED,
 }
 
 
@@ -75,6 +84,20 @@ class ScanJob:
     failed_repos: int = 0
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    updated_at: datetime = field(
+        default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+
+@dataclass
+class ScanJobRepoProgress:
+    job_id: str
+    repo_id: str
+    status: str = SCAN_JOB_REPO_STATUS_PENDING
     error_message: Optional[str] = None
     created_at: datetime = field(
         default_factory=lambda: datetime.now(UTC).replace(tzinfo=None)
