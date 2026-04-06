@@ -1,19 +1,23 @@
 export default defineNuxtConfig({
   compatibilityDate: '2024-04-03',
+
   future: {
     compatibilityVersion: 4,
   },
+
   devtools: { enabled: true },
 
   // SPA mode for static deployment
   ssr: false,
+
   nitro: {
     preset: 'static',
   },
 
   modules: [
     '@nuxt/ui',
-    '@nuxtjs/i18n'
+    '@nuxtjs/i18n',
+    ...(process.env.VITEST ? [] : ['@sentry/nuxt/module']),
   ],
 
   app: {
@@ -47,5 +51,14 @@ export default defineNuxtConfig({
     public: {
       apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000/api/v1'
     }
+  },
+
+  sentry: {
+    org: 'light-place',
+    project: 'version-check-frontend'
+  },
+
+  sourcemap: {
+    client: 'hidden'
   }
 })
