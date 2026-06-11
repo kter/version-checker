@@ -148,6 +148,17 @@ test-unit-frontend:
 test-integration:
 	cd backend && poetry run pytest tests/integration
 
+# Local E2E: builds the frontend, serves it with `nuxt preview`, and runs
+# Playwright with all backend API calls stubbed (no AWS/AI usage).
+.PHONY: test-e2e-local
+test-e2e-local:
+	cd frontend && npm run build && npm run test:e2e
+
+# Dev-environment E2E smoke tests (read-only; never triggers scans).
+.PHONY: test-e2e-dev
+test-e2e-dev:
+	npm run test:e2e:dev
+
 .PHONY: stop-hook-unit-tests
 stop-hook-unit-tests: test-unit
 

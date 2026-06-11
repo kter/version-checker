@@ -362,6 +362,149 @@ class TestScanEndpoints:
         }
 
 
+class TestScanEndpointErrorPaths:
+    @pytest.mark.asyncio
+    async def test_scan_results_require_authentication(self, app_with_mocks):
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/scan/orgs/test-org")
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_scan_results_reject_invalid_jwt(self, app_with_mocks):
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/scan/orgs/test-org",
+                headers={"Authorization": "Bearer not-a-valid-jwt"},
+            )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid authentication credentials"
+
+    @pytest.mark.asyncio
+    async def test_get_scan_job_returns_404_when_job_is_missing(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+
+        fake_service = MagicMock()
+        fake_service.get_job = AsyncMock(return_value=None)
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/scan/orgs/test-org/jobs/missing-job")
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Scan job not found"
+
+    @pytest.mark.asyncio
+    async def test_post_scan_maps_value_error_to_400(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+
+        fake_service = MagicMock()
+        fake_service.enqueue_scan = AsyncMock(
+            side_effect=ValueError("No repositories selected for scanning")
+        )
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/v1/scan/orgs/test-org")
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "No repositories selected for scanning"
+
+    @pytest.mark.asyncio
+    async def test_scan_results_map_expired_github_auth_to_401(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+        from app.usecases.github_auth import (
+            GITHUB_REAUTH_REQUIRED_DETAIL,
+            GitHubAuthorizationExpiredError,
+        )
+
+        fake_service = MagicMock()
+        fake_service.get_scan_results = AsyncMock(
+            side_effect=GitHubAuthorizationExpiredError()
+        )
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/scan/orgs/test-org")
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == GITHUB_REAUTH_REQUIRED_DETAIL
+
+    @pytest.mark.asyncio
+    async def test_put_selection_rejects_malformed_payload(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import verify_org_access
+        from app.api.routes.scan import get_scan_job_service
+
+        fake_service = MagicMock()
+
+        async def override_service():
+            return fake_service
+
+        async def override_auth(org_id: str):
+            return User(
+                id="u1", github_id=1, username="alice", github_access_token="token"
+            )
+
+        app_with_mocks.dependency_overrides[get_scan_job_service] = override_service
+        app_with_mocks.dependency_overrides[verify_org_access] = override_auth
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.put(
+                "/api/v1/scan/orgs/test-org/selection",
+                json={"selected_repo_ids": "not-a-list"},
+            )
+
+        assert response.status_code == 422
+
+
 class TestUsageEndpoints:
     @pytest.mark.asyncio
     async def test_get_current_month_usage(self, app_with_mocks, mock_db_session):
@@ -401,3 +544,36 @@ class TestUsageEndpoints:
             "period_start": "2026-03-01T00:00:00",
             "period_end": "2026-04-01T00:00:00",
         }
+
+    @pytest.mark.asyncio
+    async def test_usage_requires_authentication(self, app_with_mocks):
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/usage/current-month")
+
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_usage_maps_repository_failure_to_500(
+        self, app_with_mocks, mock_db_session
+    ):
+        from app.api.auth_deps import get_current_user
+
+        mock_db_session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+
+        async def override_current_user():
+            return User(
+                id="user-1",
+                github_id=1,
+                username="alice",
+                github_access_token="token",
+            )
+
+        app_with_mocks.dependency_overrides[get_current_user] = override_current_user
+
+        transport = ASGITransport(app=app_with_mocks)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/v1/usage/current-month")
+
+        assert response.status_code == 500
+        assert "db down" in response.json()["detail"]

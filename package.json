@@ -1,0 +1,11 @@
+{
+  "name": "version-checker",
+  "private": true,
+  "description": "Repo-level E2E smoke tests against a deployed environment (dev by default).",
+  "scripts": {
+    "test:e2e:dev": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}
