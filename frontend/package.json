@@ -15,8 +15,8 @@
   "dependencies": {
     "@nuxt/ui": "^4.4.0",
     "@nuxtjs/i18n": "^10.2.3",
-    "@sentry/nuxt": "^10.47.0",
-    "nuxt": "^4.3.1",
+    "@sentry/nuxt": "^11.14.0",
+    "nuxt": "^4.6.4",
     "vue": "^3.5.28",
     "vue-router": "^4.6.4"
   },
@@ -26,9 +26,9 @@
     "@nuxt/test-utils": "^4.0.0",
     "@playwright/test": "^1.58.2",
     "@vue/test-utils": "^2.4.6",
-    "happy-dom": "^20.7.0",
+    "happy-dom": "^21.0.4",
     "playwright": "^1.58.2",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.12"
   },
   "overrides": {
     "@vercel/nft": "^0.27.4"
